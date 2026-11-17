@@ -122,7 +122,21 @@
 		"themeLight": "Light",
 		"appearanceSection": "Appearance",
 		"automation": {
-			"engineDown": "The trigger engine is not running in this process, so these rules are stored but nothing is evaluating them. They will take effect the next time Arenet starts; the boot log explains why it is disabled."
+			"engineDown": "The trigger engine is not running in this process, so these rules are stored but nothing is evaluating them. They will take effect the next time Arenet starts; the boot log explains why it is disabled.",
+			"badge": {
+				"active": "Active",
+				"degraded": "Degraded",
+				"inactive": "Inactive",
+				"notConfigured": "Not configured"
+			},
+			"health": {
+				"success": "Pushes succeeded: {n}",
+				"permanent": "Permanent failures: {n}",
+				"dropped": "Dropped (LAPI unreachable): {n}",
+				"lastPush": "Last successful push: {at}",
+				"never": "never",
+				"error": "Last error: {err}"
+			}
 		},
 		"tabsAria": "Settings categories",
 		"unsavedLeaveTitle": "Unsaved changes",
@@ -483,7 +497,7 @@
 			"wafModeStart": "Start with Detect to spot false positives before enforcing.",
 			"uploadStreamingToggleLabel": "Upload streaming mode (registry, file servers)",
 			"responseStreamingToggleLabel": "Response streaming mode (log tails, SSE, downloads)",
-			"responseStreamingHelper": "Streams the response body to the client instead of letting the WAF buffer it for inspection. Enable for endpoints whose response never ends or arrives chunk by chunk (Home Assistant add-on logs, Server-Sent Events, long downloads) \u2014 otherwise the WAF holds the response and the client hangs, even in detect mode. Request headers + URL + body and response headers stay scanned. Leave OFF for ordinary routes.",
+			"responseStreamingHelper": "Streams the response body to the client instead of letting the WAF buffer it for inspection. Enable for endpoints whose response never ends or arrives chunk by chunk (Home Assistant add-on logs, Server-Sent Events, long downloads) — otherwise the WAF holds the response and the client hangs, even in detect mode. Request headers + URL + body and response headers stay scanned. Leave OFF for ordinary routes.",
 			"uploadStreamingHelper": "Disables WAF inspection of the request body AND Caddy's in-RAM buffering. Enable for large uploads where the body would otherwise be staged in RAM (Docker registry, file servers, video transcoders). Request headers + URL + response stay scanned. Leave this toggle OFF for API/web routes where the body is small and should be scanned.",
 			"wafDisableCRSLabel": "Disable OWASP CRS rules (trusted internal APIs)",
 			"wafDisableCRSHelper": "Stops loading the OWASP Core Rule Set on this route. No more SQLi / XSS / RCE / LFI / Protocol rules. The WAF handler stays wired (dashboard counter + audit log intact) but Coraza no longer loads any rule, so none can trigger. Use only for trusted internal APIs (LAN) or legacy routes where the CRS generates recurring false-positives. The WAF mode (off/detect/block) is preserved and effective the moment the CRS is re-enabled.",
@@ -1638,7 +1652,7 @@
 			"toastSaved": "Maintenance page saved",
 			"errFailedLoad": "failed to load the maintenance page",
 			"errFailedSave": "failed to save the maintenance page",
-			"helpRetryAfter": "{arenet.maintenance.retry_after_human} shows the per-route retry delay in words, substituted at serve time. It is empty when Retry-After is 0, so collapse the block around it with a :has(:empty) rule \u2014 the shipped example pages do.",
+			"helpRetryAfter": "{arenet.maintenance.retry_after_human} shows the per-route retry delay in words, substituted at serve time. It is empty when Retry-After is 0, so collapse the block around it with a :has(:empty) rule — the shipped example pages do.",
 			"helpEmpty": "An empty page means Arenet serves its branded default maintenance page.",
 			"builtinBadge": "Arenet Default (built-in)",
 			"builtinTooltip": "This is the built-in Arenet default page — editing it and clicking Save turns it into your custom page.",
@@ -1648,7 +1662,7 @@
 			"placeholdersTitle": "Available placeholders",
 			"previewMessage": "Preview: your global maintenance message appears here.",
 			"ph": {
-				"retryAfterHuman": "The same delay in words (\u201c1 day\u201d, \u201c30 minutes\u201d) \u2014 English only, and empty when Retry-After is 0",
+				"retryAfterHuman": "The same delay in words (“1 day”, “30 minutes”) — English only, and empty when Retry-After is 0",
 				"message": "The route's message, or this global message as fallback",
 				"refreshMeta": "Auto-refresh meta tag built from Retry-After (built-in default only; empty when Retry-After is 0)",
 				"method": "Request method (GET, POST, …)",

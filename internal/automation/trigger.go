@@ -248,6 +248,16 @@ type Engine struct {
 	totalPushPermanent atomic.Uint64
 	totalPushDropped   atomic.Uint64
 	loginFailures      atomic.Uint64
+
+	// lastPushSuccessNano is the Now().UnixNano() of the last
+	// successful push, or 0 when none has succeeded yet. Read by
+	// HealthSnapshot (v2.83 — the dashboard badge / API health block).
+	lastPushSuccessNano atomic.Int64
+	// lastPushErr holds the message of the most recent FAILED push, or
+	// nil. Set on a permanent/unknown/retries-exhausted failure and
+	// CLEARED on the next success, so a non-nil value means "the most
+	// recent completed push failed" — a recent error, not a stale one.
+	lastPushErr atomic.Pointer[string]
 }
 
 // NewEngine validates the config + returns an Engine. Does
@@ -644,10 +654,12 @@ func (e *Engine) processIntent(ctx context.Context, writer Writer, intent Intent
 	alert := buildAlert(intent, e.cfg.Now())
 
 	backoff := writerBackoffInitial
+	var lastTransientErr error
 	for attempt := 1; attempt <= writerMaxRetries; attempt++ {
 		_, err := writer.PushAlert(ctx, alert)
 		if err == nil {
 			e.totalPushSuccess.Add(1)
+			e.recordPushSuccess(e.cfg.Now())
 			// Record success in dedupe so the next tick
 			// for the same (src_ip, scenario) within
 			// dedupeTTL skips a duplicate push.
@@ -666,12 +678,14 @@ func (e *Engine) processIntent(ctx context.Context, writer Writer, intent Intent
 		if errors.Is(err, ErrLoginFailed) {
 			e.totalPushPermanent.Add(1)
 			e.loginFailures.Add(1)
+			e.recordPushError(err.Error())
 			e.cfg.Logger.Warn("automation: push permanent failure (creds bad or alert shape rejected) — dropping intent",
 				"src_ip", intent.SrcIP, "scenario", scenario, "err", err)
 			return
 		}
 
 		if errors.Is(err, ErrLAPIUnavailable) {
+			lastTransientErr = err
 			e.cfg.Logger.Warn("automation: push transient failure — retrying",
 				"src_ip", intent.SrcIP, "scenario", scenario,
 				"attempt", attempt, "err", err)
@@ -691,13 +705,21 @@ func (e *Engine) processIntent(ctx context.Context, writer Writer, intent Intent
 		// these (could be a programming error we don't want
 		// to amplify with retries).
 		e.totalPushPermanent.Add(1)
+		e.recordPushError(err.Error())
 		e.cfg.Logger.Error("automation: push unknown error class — dropping intent",
 			"src_ip", intent.SrcIP, "scenario", scenario, "err", err)
 		return
 	}
 
-	// All retries exhausted → drop.
+	// All retries exhausted → drop. Surface the last transient error so
+	// the health block says WHY (unreachable LAPI), not just that a drop
+	// happened.
 	e.totalPushDropped.Add(1)
+	if lastTransientErr != nil {
+		e.recordPushError(lastTransientErr.Error())
+	} else {
+		e.recordPushError("push retries exhausted")
+	}
 	e.cfg.Logger.Warn("automation: push retries exhausted — dropping intent",
 		"src_ip", intent.SrcIP, "scenario", scenario)
 }
@@ -797,4 +819,40 @@ func (e *Engine) TotalIntentsDrop() uint64   { return e.totalIntentsDrop.Load() 
 func (e *Engine) TotalPushSuccess() uint64   { return e.totalPushSuccess.Load() }
 func (e *Engine) TotalPushPermanent() uint64 { return e.totalPushPermanent.Load() }
 func (e *Engine) TotalPushDropped() uint64   { return e.totalPushDropped.Load() }
-func (e *Engine) LoginFailures() uint64      { return e.loginFailures.Load() }
+
+// recordPushSuccess stamps the success time and clears any stale error.
+// The clear is the load-bearing half (D4): it is what makes
+// LastPushError report only a failure that is more recent than the last
+// success, instead of a tombstone that lingers forever.
+func (e *Engine) recordPushSuccess(ts time.Time) {
+	e.lastPushSuccessNano.Store(ts.UnixNano())
+	e.lastPushErr.Store(nil)
+}
+
+// recordPushError stores the message of a failed push. Not cleared here;
+// a later success clears it.
+func (e *Engine) recordPushError(msg string) {
+	e.lastPushErr.Store(&msg)
+}
+
+// LastPushAt returns the time of the last successful push. The bool is
+// false when none has succeeded yet (the caller surfaces null, not the
+// zero time).
+func (e *Engine) LastPushAt() (time.Time, bool) {
+	ns := e.lastPushSuccessNano.Load()
+	if ns == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(0, ns), true
+}
+
+// LastPushError returns the most recent failed-push message. The bool is
+// false when the most recent completed push succeeded (or none has run).
+func (e *Engine) LastPushError() (string, bool) {
+	p := e.lastPushErr.Load()
+	if p == nil {
+		return "", false
+	}
+	return *p, true
+}
+func (e *Engine) LoginFailures() uint64 { return e.loginFailures.Load() }

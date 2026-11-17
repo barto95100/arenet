@@ -16,6 +16,8 @@
 
 package automation
 
+import "time"
+
 // health.go exposes the auto-classify writer's state for external
 // monitoring (the Prometheus /metrics endpoint in internal/api).
 //
@@ -47,6 +49,14 @@ type HealthSnapshot struct {
 	PushSuccess   uint64
 	PushPermanent uint64
 	PushDropped   uint64
+	// LastPushAt is the time of the last successful push, or nil when
+	// none has succeeded yet (v2.83 — the dashboard badge / API health).
+	LastPushAt *time.Time
+	// LastPushError is the message of the most recent failed push, or
+	// nil. Non-nil means the most recent completed push failed (it is
+	// cleared on the next success), so it is a recent error, not a
+	// tombstone.
+	LastPushError *string
 }
 
 // HealthReporter is the read-only surface a metrics collector asserts
@@ -75,6 +85,12 @@ func (m *DefaultManager) HealthSnapshot() HealthSnapshot {
 		snap.PushSuccess = m.engine.TotalPushSuccess()
 		snap.PushPermanent = m.engine.TotalPushPermanent()
 		snap.PushDropped = m.engine.TotalPushDropped()
+		if ts, ok := m.engine.LastPushAt(); ok {
+			snap.LastPushAt = &ts
+		}
+		if msg, ok := m.engine.LastPushError(); ok {
+			snap.LastPushError = &msg
+		}
 	}
 	return snap
 }

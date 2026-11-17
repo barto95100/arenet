@@ -122,7 +122,21 @@
 		"themeLight": "Clair",
 		"appearanceSection": "Apparence",
 		"automation": {
-			"engineDown": "Le moteur de déclenchement ne tourne pas dans ce processus : ces règles sont enregistrées mais rien ne les évalue. Elles prendront effet au prochain démarrage d’Arenet ; le journal de démarrage indique pourquoi il est désactivé."
+			"engineDown": "Le moteur de déclenchement ne tourne pas dans ce processus : ces règles sont enregistrées mais rien ne les évalue. Elles prendront effet au prochain démarrage d’Arenet ; le journal de démarrage indique pourquoi il est désactivé.",
+			"badge": {
+				"active": "Actif",
+				"degraded": "Dégradé",
+				"inactive": "Inactif",
+				"notConfigured": "Non configuré"
+			},
+			"health": {
+				"success": "Envois réussis : {n}",
+				"permanent": "Échecs permanents : {n}",
+				"dropped": "Abandonnés (LAPI injoignable) : {n}",
+				"lastPush": "Dernier envoi réussi : {at}",
+				"never": "jamais",
+				"error": "Dernière erreur : {err}"
+			}
 		},
 		"tabsAria": "Catégories de réglages",
 		"unsavedLeaveTitle": "Modifications non enregistrées",

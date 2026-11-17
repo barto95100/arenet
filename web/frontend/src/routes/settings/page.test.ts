@@ -63,6 +63,7 @@ import {
 } from '$lib/stores/unsaved.svelte';
 
 import Page from './+page.svelte';
+import { settingsApi } from '$lib/api/settings';
 
 function tab(id: string): HTMLElement {
 	return screen.getByTestId(`settings-tab-${id}`);
@@ -273,5 +274,109 @@ describe('Settings page — the automation engine', () => {
 		await userEvent.click(tab('security'));
 
 		expect(await screen.findByTestId('automation-engine-down')).toBeInTheDocument();
+	});
+});
+
+// v2.83 (point 3a) — the Security Automation badge reads four states off
+// the GET payload. The whole point of the lot is that a broken auto-ban
+// shows as "Degraded" without an external scraper, so the load-bearing
+// assertion is that an unhealthy writer does NOT read "Active".
+describe('Settings page — Security Automation badge (v2.83)', () => {
+	const enabledRule = {
+		enabled: true,
+		threshold: 2,
+		window_ns: 60e9,
+		duration_ns: 3600e9,
+		cooldown_ns: 86400e9
+	};
+	const disabledRule = { ...enabledRule, enabled: false };
+
+	function payload(over: Record<string, unknown>) {
+		return {
+			rules: { rules: {} },
+			credentials: { lapiUrl: '', machineId: '', configured: false },
+			engineRunning: true,
+			health: {
+				writerHealthy: true,
+				totalPushSuccess: 0,
+				totalPushPermanent: 0,
+				totalPushDropped: 0,
+				lastPushAt: null,
+				lastPushError: null
+			},
+			...over
+		};
+	}
+
+	async function badgeFor(over: Record<string, unknown>): Promise<HTMLElement> {
+		(settingsApi.getAutomation as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+			payload(over)
+		);
+		render(Page);
+		await userEvent.click(tab('security'));
+		return screen.findByTestId('automation-badge');
+	}
+
+	beforeEach(() => {
+		resetUnsavedRegistry();
+	});
+
+	it('reads "Not configured" without credentials', async () => {
+		const badge = await badgeFor({ credentials: { lapiUrl: '', machineId: '', configured: false } });
+		expect(badge.getAttribute('data-state')).toBe('notConfigured');
+		expect(badge.textContent).toContain('Not configured');
+	});
+
+	it('reads "Inactive" when configured but no rule is enabled', async () => {
+		const badge = await badgeFor({
+			credentials: { lapiUrl: 'http://x', machineId: 'm', configured: true },
+			rules: { rules: { 'waf-sqli': disabledRule } }
+		});
+		expect(badge.getAttribute('data-state')).toBe('inactive');
+		expect(badge.textContent).toContain('Inactive');
+	});
+
+	it('reads "Active" when configured, a rule is enabled, and the writer is healthy', async () => {
+		const badge = await badgeFor({
+			credentials: { lapiUrl: 'http://x', machineId: 'm', configured: true },
+			rules: { rules: { 'waf-sqli': enabledRule } }
+		});
+		expect(badge.getAttribute('data-state')).toBe('active');
+		expect(badge.textContent).toContain('Active');
+	});
+
+	it('reads "Degraded" (not Active) when the writer is unhealthy', async () => {
+		const badge = await badgeFor({
+			credentials: { lapiUrl: 'http://x', machineId: 'm', configured: true },
+			rules: { rules: { 'waf-sqli': enabledRule } },
+			health: {
+				writerHealthy: false,
+				totalPushSuccess: 1,
+				totalPushPermanent: 3,
+				totalPushDropped: 0,
+				lastPushAt: '2026-11-17T09:14:02Z',
+				lastPushError: 'automation: watcher login failed'
+			}
+		});
+		expect(badge.getAttribute('data-state')).toBe('degraded');
+		expect(badge.textContent).toContain('Degraded');
+		// Load-bearing: a broken writer must never read as healthy.
+		expect(badge.textContent).not.toContain('Active');
+	});
+
+	it('reads "Degraded" when the most recent push errored even if login is fine', async () => {
+		const badge = await badgeFor({
+			credentials: { lapiUrl: 'http://x', machineId: 'm', configured: true },
+			rules: { rules: { 'waf-sqli': enabledRule } },
+			health: {
+				writerHealthy: true,
+				totalPushSuccess: 5,
+				totalPushPermanent: 0,
+				totalPushDropped: 2,
+				lastPushAt: '2026-11-17T09:14:02Z',
+				lastPushError: 'automation: LAPI unavailable'
+			}
+		});
+		expect(badge.getAttribute('data-state')).toBe('degraded');
 	});
 });

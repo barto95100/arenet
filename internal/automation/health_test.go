@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // A configured, never-used writer reports configured + not-failed, and
@@ -80,6 +81,57 @@ func TestHealthSnapshot_LoginFailedPropagates(t *testing.T) {
 	}
 	if !snap.WriterConfigured {
 		t.Error("WriterConfigured = false, want true")
+	}
+}
+
+// The snapshot forwards the engine's last-push view (v2.83): a nil
+// engine leaves both nil; an engine that has pushed surfaces the time
+// and (after a failure) the error. The engine-level set/clear is proven
+// by TestEngine_RecordsLastPushAndClearsOnSuccess; this pins that
+// HealthSnapshot passes it through.
+func TestHealthSnapshot_LastPushFieldsFromEngine(t *testing.T) {
+	w, err := NewWatcherClient(WatcherConfig{
+		LAPIURL: "http://127.0.0.1:8080", MachineID: "m", Password: "p",
+	})
+	if err != nil {
+		t.Fatalf("NewWatcherClient: %v", err)
+	}
+
+	now := time.Now()
+	e, err := NewEngine(EngineConfig{
+		Waf: &fakeWafReader{}, Throttle: &fakeThrottleReader{}, Audit: &fakeAuditReader{},
+		Rules:               NewRuleSetHolder(DefaultRuleSet()),
+		Writer:              w,
+		Logger:              silentLogger(),
+		TickInterval:        20 * time.Millisecond,
+		Now:                 func() time.Time { return now },
+		InitialCursorOffset: -time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	m := NewDefaultManager(e, nil, w)
+
+	// Fresh engine: no push yet → both nil.
+	snap := m.HealthSnapshot()
+	if snap.LastPushAt != nil || snap.LastPushError != nil {
+		t.Fatalf("fresh engine: LastPushAt=%v LastPushError=%v, want nil/nil", snap.LastPushAt, snap.LastPushError)
+	}
+
+	// Record a success + an error directly on the engine.
+	e.recordPushSuccess(now)
+	snap = m.HealthSnapshot()
+	if snap.LastPushAt == nil || !snap.LastPushAt.Equal(now) {
+		t.Fatalf("after success: LastPushAt=%v, want %v", snap.LastPushAt, now)
+	}
+	if snap.LastPushError != nil {
+		t.Fatalf("after success: LastPushError=%v, want nil", *snap.LastPushError)
+	}
+
+	e.recordPushError("boom")
+	snap = m.HealthSnapshot()
+	if snap.LastPushError == nil || *snap.LastPushError != "boom" {
+		t.Fatalf("after error: LastPushError=%v, want \"boom\"", snap.LastPushError)
 	}
 }
 

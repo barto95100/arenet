@@ -69,6 +69,16 @@ func withFakeManager(t *testing.T) *fakeManager {
 	return m
 }
 
+// fakeHealthManager is a fakeManager that also implements
+// automation.HealthReporter, so getAutomation's health block can be
+// driven from a chosen snapshot (v2.83 point 3(a)).
+type fakeHealthManager struct {
+	*fakeManager
+	snap automation.HealthSnapshot
+}
+
+func (f *fakeHealthManager) HealthSnapshot() automation.HealthSnapshot { return f.snap }
+
 // --- GET /settings/automation -------------------------------------------
 
 func TestAutomation_GET_FreshInstall_ReturnsDefaults(t *testing.T) {
@@ -514,5 +524,105 @@ func TestAutomation_GET_ReportsWhetherTheEngineRuns(t *testing.T) {
 	}
 	if !up.EngineRunning {
 		t.Error("engineRunning must be true once a manager is registered")
+	}
+}
+
+// v2.83 point 3(a): GET surfaces the live writer-health block when a
+// HealthReporter manager is registered. writerHealthy is
+// configured && !loginFailed; counters + lastPushAt/lastPushError pass
+// through; lastPushAt is RFC3339 UTC.
+func TestAutomation_GET_HealthWhenConfigured(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	at := time.Date(2026, 11, 17, 9, 14, 2, 0, time.UTC)
+	fhm := &fakeHealthManager{
+		fakeManager: &fakeManager{configured: true},
+		snap: automation.HealthSnapshot{
+			WriterConfigured:  true,
+			WriterLoginFailed: false,
+			PushSuccess:       42,
+			PushPermanent:     0,
+			PushDropped:       1,
+			LastPushAt:        &at,
+		},
+	}
+	automation.SetManager(fhm)
+	t.Cleanup(func() { automation.SetManager(nil) })
+
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/settings/automation", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	var got automationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !got.Health.WriterHealthy {
+		t.Error("writerHealthy = false, want true (configured + not login-failed)")
+	}
+	if got.Health.TotalPushSuccess != 42 || got.Health.TotalPushDropped != 1 {
+		t.Errorf("counters = %+v, want success=42 dropped=1", got.Health)
+	}
+	if got.Health.LastPushAt == nil || *got.Health.LastPushAt != "2026-11-17T09:14:02Z" {
+		t.Errorf("lastPushAt = %v, want 2026-11-17T09:14:02Z", got.Health.LastPushAt)
+	}
+	if got.Health.LastPushError != nil {
+		t.Errorf("lastPushError = %v, want null", *got.Health.LastPushError)
+	}
+
+	// Derivation: a login-failed writer is NOT healthy, and its error
+	// surfaces. This is the degraded signal the badge turns orange on.
+	errMsg := "automation: watcher login failed"
+	fhm.snap = automation.HealthSnapshot{
+		WriterConfigured: true, WriterLoginFailed: true,
+		PushPermanent: 3, LastPushError: &errMsg,
+	}
+	rec2 := httptest.NewRecorder()
+	env.router.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/api/v1/settings/automation", nil))
+	var deg automationResponse
+	if err := json.Unmarshal(rec2.Body.Bytes(), &deg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if deg.Health.WriterHealthy {
+		t.Error("writerHealthy = true for a login-failed writer, want false")
+	}
+	if deg.Health.LastPushError == nil || *deg.Health.LastPushError != errMsg {
+		t.Errorf("lastPushError = %v, want %q", deg.Health.LastPushError, errMsg)
+	}
+}
+
+// v2.83 point 3(a) — the "no 500" gate: with no manager (boot-degraded)
+// the health block is still present with zero/null values, and the
+// response is 200. A nil-deref or an omitted block would fail here.
+func TestAutomation_GET_HealthZeroWhenUnconfigured(t *testing.T) {
+	env := newTestEnv(t, false)
+	automation.SetManager(nil)
+
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/settings/automation", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	var got automationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Health.WriterHealthy {
+		t.Error("writerHealthy = true with no manager, want false")
+	}
+	if got.Health.TotalPushSuccess != 0 || got.Health.TotalPushPermanent != 0 || got.Health.TotalPushDropped != 0 {
+		t.Errorf("counters non-zero with no manager: %+v", got.Health)
+	}
+	if got.Health.LastPushAt != nil || got.Health.LastPushError != nil {
+		t.Errorf("lastPushAt/lastPushError non-null with no manager: %+v", got.Health)
+	}
+	// The block must be emitted, not omitted, and the null fields explicit.
+	body := rec.Body.String()
+	if !strings.Contains(body, `"health":`) {
+		t.Errorf("health block omitted from body: %s", body)
+	}
+	if !strings.Contains(body, `"lastPushAt":null`) || !strings.Contains(body, `"lastPushError":null`) {
+		t.Errorf("null health fields not explicit in body: %s", body)
 	}
 }
