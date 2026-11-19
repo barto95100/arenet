@@ -384,6 +384,19 @@ func (e *Engine) tick(ctx context.Context) {
 	events = append(events, e.readThrottle(ctx, now)...)
 	events = append(events, e.readAudit(ctx, now)...)
 
+	// === TEMP DIAG (diag/automation-trigger-trace) ===
+	{
+		hist := map[Source]int{}
+		for _, ev := range events {
+			hist[ev.Source]++
+		}
+		e.cursorMu.Lock()
+		curRCE := e.cursor[SourceWafRCE]
+		e.cursorMu.Unlock()
+		e.cfg.Logger.Info("DIAG tick.read", "total", len(events), "bySource", hist, "cursorRCE", curRCE, "now", now)
+	}
+	// === /TEMP DIAG ===
+
 	if len(events) == 0 {
 		return
 	}
@@ -401,10 +414,17 @@ func (e *Engine) tick(ctx context.Context) {
 
 	for k, groupEvents := range groups {
 		rule, ok := rs.Rules[k.Source]
+		// === TEMP DIAG (diag/automation-trigger-trace) ===
+		e.cfg.Logger.Info("DIAG group",
+			"srcIP", k.SrcIP, "source", k.Source, "n", len(groupEvents),
+			"ruleKnown", ok, "ruleEnabled", rule.Enabled,
+			"threshold", rule.Threshold, "window", rule.Window.String())
+		// === /TEMP DIAG ===
 		if !ok || !rule.Enabled {
 			continue
 		}
 		if len(groupEvents) < rule.Threshold {
+			e.cfg.Logger.Info("DIAG skip.threshold.batch", "srcIP", k.SrcIP, "source", k.Source, "n", len(groupEvents), "threshold", rule.Threshold) // TEMP DIAG
 			continue
 		}
 		// Window check: count events whose Ts is within
@@ -423,6 +443,7 @@ func (e *Engine) tick(ctx context.Context) {
 			}
 		}
 		if recentCount < rule.Threshold {
+			e.cfg.Logger.Info("DIAG skip.threshold.window", "srcIP", k.SrcIP, "source", k.Source, "recentCount", recentCount, "threshold", rule.Threshold, "window", rule.Window.String()) // TEMP DIAG
 			continue
 		}
 
@@ -430,6 +451,7 @@ func (e *Engine) tick(ctx context.Context) {
 
 		// Cooldown check (D5.A).
 		if e.cooldown.HasCooldown(k.SrcIP, scenario) {
+			e.cfg.Logger.Info("DIAG skip.cooldown", "srcIP", k.SrcIP, "scenario", scenario) // TEMP DIAG
 			e.cfg.Logger.Debug("automation: skipping intent (cooldown)",
 				"src_ip", k.SrcIP, "scenario", scenario)
 			continue
@@ -449,6 +471,7 @@ func (e *Engine) tick(ctx context.Context) {
 			}
 		}
 		if active {
+			e.cfg.Logger.Info("DIAG skip.dedupe.active", "srcIP", k.SrcIP, "scenario", scenario, "hit", hit) // TEMP DIAG
 			e.cfg.Logger.Debug("automation: skipping intent (already active in LAPI)",
 				"src_ip", k.SrcIP, "scenario", scenario)
 			continue
@@ -464,10 +487,12 @@ func (e *Engine) tick(ctx context.Context) {
 		select {
 		case e.intents <- intent:
 			e.totalIntentsEmit.Add(1)
+			e.cfg.Logger.Info("DIAG intent.emitted", "srcIP", k.SrcIP, "source", k.Source, "count", recentCount, "scenario", scenario) // TEMP DIAG
 		default:
 			// Buffer full → drop. AC #13 / D7.A. The
 			// source events stay in their tables.
 			e.totalIntentsDrop.Add(1)
+			e.cfg.Logger.Info("DIAG intent.dropped.bufferfull", "srcIP", k.SrcIP, "source", k.Source) // TEMP DIAG
 		}
 	}
 }
@@ -494,6 +519,7 @@ func (e *Engine) readWaf(ctx context.Context, now time.Time) []SourceEvent {
 		e.cfg.Logger.Warn("automation: waf read failed", "err", err)
 		return nil
 	}
+	e.cfg.Logger.Info("DIAG readWaf", "from", cursor, "to", now, "returned", len(events)) // TEMP DIAG (diag/automation-trigger-trace)
 
 	// Advance cursor to the latest event ts we observed.
 	// If we hit the queryLimit, leave the cursor at the
