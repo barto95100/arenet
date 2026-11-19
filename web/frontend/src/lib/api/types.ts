@@ -1568,6 +1568,31 @@ export interface AutomationResponse {
 	 * `credentials.configured`, which is about the stored credentials.
 	 */
 	engineRunning?: boolean;
+	/**
+	 * v2.83 (point 3a) — live auto-classify writer health. The same facts
+	 * the token-authed /metrics endpoint exposes, surfaced here so the
+	 * Security Automation badge can render without a scraper. Always
+	 * present from a v2.83+ backend; optional so an older backend (which
+	 * omits it) is tolerated — the badge then falls back to the
+	 * credentials-only state.
+	 */
+	health?: AutomationHealth;
+}
+
+/**
+ * v2.83 — the read-only health block of the automation GET response.
+ * Counters are cumulative; lastPushAt/lastPushError are point-in-time.
+ */
+export interface AutomationHealth {
+	/** Writer is wired AND its last LAPI login was not rejected. */
+	writerHealthy: boolean;
+	totalPushSuccess: number;
+	totalPushPermanent: number;
+	totalPushDropped: number;
+	/** RFC3339 time of the last successful push, or null if none yet. */
+	lastPushAt: string | null;
+	/** Most recent failed-push message, or null (cleared on next success). */
+	lastPushError: string | null;
 }
 
 export interface AutomationCredentialsView {

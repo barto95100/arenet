@@ -36,6 +36,7 @@
 		AUTOMATION_SOURCE_LABELS,
 		FORWARD_AUTH_PROVIDER_KINDS,
 		type AutomationCredentialsView,
+		type AutomationHealth,
 		type AutomationRule,
 		type AutomationRuleSet,
 		type AutomationSource,
@@ -234,6 +235,10 @@
 		machineId: '',
 		configured: false
 	});
+	// v2.83 (point 3a) — live writer health for the tri-state badge.
+	// Null until loaded, or when an older backend omits the block (the
+	// badge then falls back to the credentials-only state).
+	let automationHealth = $state<AutomationHealth | null>(null);
 	let automationLoading = $state(true);
 	let automationLoadError = $state<string | null>(null);
 
@@ -268,6 +273,8 @@
 			// them. Nothing said so before, and the "Configured" badge
 			// beside them reads from the credentials, which are fine.
 			automationEngineRunning = res.engineRunning ?? true;
+			// v2.83 — null when the backend omits it (older build).
+			automationHealth = res.health ?? null;
 			// Seed the working copy from the loaded set;
 			// re-runs on every load so the operator sees
 			// the live state, not a stale draft.
@@ -596,6 +603,48 @@
 		void language.current;
 		return t(key, params);
 	}
+
+	// v2.83 (point 3a) — Security Automation badge state. Derived from the
+	// credentials + rule set + live health, in precedence order:
+	//   notConfigured → no watcher credentials stored (unchanged pre-v2.83)
+	//   inactive      → configured but no Trigger rule enabled (nothing fires)
+	//   degraded      → a rule is enabled but the writer is unhealthy or the
+	//                   most recent push failed (auto-ban is broken NOW)
+	//   active        → configured, a rule enabled, writer healthy
+	// When health is absent (older backend) the degraded branch is skipped
+	// and a configured+enabled writer reads "active".
+	type AutoBadgeState = 'notConfigured' | 'inactive' | 'degraded' | 'active';
+	let autoBadgeState = $derived.by<AutoBadgeState>(() => {
+		if (!automationCreds.configured) return 'notConfigured';
+		const rules = automationRules.rules ?? {};
+		const anyEnabled = Object.values(rules).some((r) => r?.enabled);
+		if (!anyEnabled) return 'inactive';
+		const h = automationHealth;
+		if (h && (!h.writerHealthy || h.lastPushError)) return 'degraded';
+		return 'active';
+	});
+
+	// Hover tooltip for the badge — the counters + last push + last error.
+	// Empty when no health block (nothing useful to show).
+	let autoBadgeTooltip = $derived.by<string>(() => {
+		void language.current;
+		const h = automationHealth;
+		if (!h) return '';
+		const lines = [
+			tl('settings.automation.health.success', { n: h.totalPushSuccess }),
+			tl('settings.automation.health.permanent', { n: h.totalPushPermanent }),
+			tl('settings.automation.health.dropped', { n: h.totalPushDropped }),
+			tl('settings.automation.health.lastPush', {
+				at: h.lastPushAt
+					? new Date(h.lastPushAt).toLocaleString()
+					: tl('settings.automation.health.never')
+			})
+		];
+		if (h.lastPushError) {
+			lines.push(tl('settings.automation.health.error', { err: h.lastPushError }));
+		}
+		return lines.join('\n');
+	});
 
 	// --- v2.50 access log ------------------------------------------
 	//
@@ -1140,10 +1189,25 @@
 						</div>
 						{#if automationLoading}
 							<Spinner size="sm" />
-						{:else if automationCreds.configured}
-							<Badge variant="status-up">Configured</Badge>
 						{:else}
-							<Badge variant="status-warn">Not configured</Badge>
+							<!-- v2.83 (point 3a) — tri-state within the configured
+							     case; "Not configured" unchanged. Tooltip carries the
+							     counters + last push + last error. -->
+							<span
+								title={autoBadgeTooltip}
+								data-testid="automation-badge"
+								data-state={autoBadgeState}
+							>
+								{#if autoBadgeState === 'active'}
+									<Badge variant="status-up">{tl('settings.automation.badge.active')}</Badge>
+								{:else if autoBadgeState === 'degraded'}
+									<Badge variant="status-warn">{tl('settings.automation.badge.degraded')}</Badge>
+								{:else if autoBadgeState === 'inactive'}
+									<Badge variant="neutral">{tl('settings.automation.badge.inactive')}</Badge>
+								{:else}
+									<Badge variant="status-warn">{tl('settings.automation.badge.notConfigured')}</Badge>
+								{/if}
+							</span>
 						{/if}
 					</header>
 

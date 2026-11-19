@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/automation"
@@ -68,6 +69,31 @@ type automationResponse struct {
 	// correct. The missing fact gets its own field rather than
 	// overloading that one.
 	EngineRunning bool `json:"engineRunning"`
+	// Health is the live auto-classify writer health (v2.83, point
+	// 3(a)). Always present: zero/null when no manager is wired or the
+	// writer is unconfigured — never omitted, so the frontend badge can
+	// always read it without a nil check.
+	Health automationHealth `json:"health"`
+}
+
+// automationHealth is the GET response's read-only health block. It
+// surfaces the same facts as the /metrics endpoint (v2.83 point 3(b))
+// so the dashboard badge can render without a scraper. Counters are
+// cumulative; LastPushAt/LastPushError are the point-in-time view.
+type automationHealth struct {
+	// WriterHealthy is WriterConfigured && !WriterLoginFailed: the
+	// writer is wired AND its last LAPI login was not rejected. False
+	// whenever credentials are absent.
+	WriterHealthy      bool   `json:"writerHealthy"`
+	TotalPushSuccess   uint64 `json:"totalPushSuccess"`
+	TotalPushPermanent uint64 `json:"totalPushPermanent"`
+	TotalPushDropped   uint64 `json:"totalPushDropped"`
+	// LastPushAt is the RFC3339 (UTC) time of the last successful push,
+	// or nil when none has succeeded yet.
+	LastPushAt *string `json:"lastPushAt"`
+	// LastPushError is the message of the most recent failed push, or
+	// nil (cleared on the next success — see automation.HealthSnapshot).
+	LastPushError *string `json:"lastPushError"`
 }
 
 type credentialsResponse struct {
@@ -130,6 +156,23 @@ func (h *Handler) getAutomation(w http.ResponseWriter, r *http.Request) {
 		configured = mgr.CredentialsConfigured()
 	}
 
+	// v2.83 point 3(a) — live writer health. Zero/null when no manager
+	// is wired (boot-degraded) or the manager is not a HealthReporter;
+	// the block is always emitted so the badge reads it unconditionally.
+	health := automationHealth{}
+	if hr, ok := mgr.(automation.HealthReporter); ok {
+		snap := hr.HealthSnapshot()
+		health.WriterHealthy = snap.WriterConfigured && !snap.WriterLoginFailed
+		health.TotalPushSuccess = snap.PushSuccess
+		health.TotalPushPermanent = snap.PushPermanent
+		health.TotalPushDropped = snap.PushDropped
+		if snap.LastPushAt != nil {
+			s := snap.LastPushAt.UTC().Format(time.RFC3339)
+			health.LastPushAt = &s
+		}
+		health.LastPushError = snap.LastPushError
+	}
+
 	writeJSON(w, http.StatusOK, automationResponse{
 		Rules: rules,
 		Credentials: credentialsResponse{
@@ -140,6 +183,7 @@ func (h *Handler) getAutomation(w http.ResponseWriter, r *http.Request) {
 		// v2.72 — nil manager means wireAutomation failed at boot and
 		// nothing is evaluating these rules.
 		EngineRunning: mgr != nil,
+		Health:        health,
 	})
 }
 

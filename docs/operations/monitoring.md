@@ -43,6 +43,18 @@ which otherwise fails silently when its machine credential breaks.
 | `arenet_automation_pushes_total{result="permanent"}` | counter | Dropped on a non-retryable error (bad credential or rejected payload) — the signal that needs a human. |
 | `arenet_automation_pushes_total{result="dropped"}` | counter | Dropped after retry exhaustion against an unreachable LAPI. |
 
+### In the UI, without a scraper (v2.83.0+)
+
+The same facts are surfaced inside Arenet for operators who do not run a
+collector: the **Security Automation** card (Settings → Security) shows a
+status badge — **Active** (green), **Degraded** (orange: the writer's
+login failed or the most recent push errored — auto-banning is broken),
+or **Inactive** (grey: configured but no rule enabled). Hover it for the
+push counters, last successful push, and last error. The same block is on
+`GET /api/v1/settings/automation` under `health` (viewer role), so a
+dashboard can read it without the Prometheus endpoint. `/metrics` remains
+the channel for historical/rate alerting.
+
 ### Recommended alert
 
 Fire when the writer is broken, or permanent-drops are climbing:

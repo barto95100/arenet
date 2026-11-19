@@ -1652,6 +1652,39 @@ components:
       properties:
         rules: { $ref: '#/components/schemas/SettingsAutomationRuleSet' }
         credentials: { $ref: '#/components/schemas/SettingsAutomationCredentials' }
+        engineRunning:
+          type: boolean
+          description: |
+            Whether the trigger engine exists in the running process. False
+            means wireAutomation failed at boot: the rules are stored but
+            nothing is evaluating them. Distinct from `credentials.configured`.
+        health:
+          $ref: '#/components/schemas/SettingsAutomationHealth'
+    SettingsAutomationHealth:
+      type: object
+      description: |
+        Live auto-classify writer health (v2.83). The same facts the
+        token-authed /metrics endpoint exposes, surfaced here for the
+        dashboard badge. Always present; zero/null when the writer is
+        unconfigured or the engine is not running.
+      required: [writerHealthy, totalPushSuccess, totalPushPermanent, totalPushDropped]
+      properties:
+        writerHealthy:
+          type: boolean
+          description: Writer is wired AND its last LAPI login was not rejected (configured && !loginFailed).
+        totalPushSuccess: { type: integer, format: int64, description: Cumulative successful pushes to LAPI. }
+        totalPushPermanent: { type: integer, format: int64, description: "Cumulative permanent drops (bad credential / rejected payload — needs a human)." }
+        totalPushDropped: { type: integer, format: int64, description: Cumulative drops from retry-exhaustion against an unreachable LAPI.
+          }
+        lastPushAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: RFC3339 time of the last successful push, or null if none yet.
+        lastPushError:
+          type: string
+          nullable: true
+          description: Message of the most recent failed push, or null (cleared on the next success).
     SettingsAutomationRulesEnvelope:
       type: object
       additionalProperties: false
