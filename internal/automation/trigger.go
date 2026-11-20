@@ -521,6 +521,34 @@ func (e *Engine) readWaf(ctx context.Context, now time.Time) []SourceEvent {
 	}
 	e.cfg.Logger.Info("DIAG readWaf", "from", cursor, "to", now, "returned", len(events)) // TEMP DIAG (diag/automation-trigger-trace)
 
+	// === TEMP DIAG (diag/automation-trigger-trace): unfiltered probe ===
+	// Re-run the SAME read against the SAME store handle in the SAME tick,
+	// but with NO time window. The adapter hardcodes Action=BLOCK, so the
+	// only variable removed is [from,to]. This isolates the cause:
+	//   unfilteredBlockCount > 0 while returned == 0
+	//       -> the [from,to] window is excluding BLOCK rows that exist.
+	//          Compare newestTsUnix to fromUnix/toUnix to see why.
+	//   unfilteredBlockCount == 0
+	//       -> no Action="BLOCK" rows are visible to this adapter at all,
+	//          even though /api/v1/security/events shows them -> the stored
+	//          action string differs from observability.WafActionBlock.
+	if probe, perr := e.cfg.Waf.QueryWafEvents(ctx, WafFilter{Limit: queryLimit}); perr != nil {
+		e.cfg.Logger.Info("DIAG readWaf.probe", "err", perr.Error())
+	} else {
+		newest := make([]int64, 0, 5)
+		for i, ev := range probe {
+			if i >= 5 {
+				break
+			}
+			newest = append(newest, ev.Ts.Unix())
+		}
+		e.cfg.Logger.Info("DIAG readWaf.probe",
+			"unfilteredBlockCount", len(probe),
+			"fromUnix", cursor.Unix(), "toUnix", now.Unix(),
+			"newestTsUnix", newest)
+	}
+	// === /TEMP DIAG ===
+
 	// Advance cursor to the latest event ts we observed.
 	// If we hit the queryLimit, leave the cursor at the
 	// observed-max — next tick reads the remainder.

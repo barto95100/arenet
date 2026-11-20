@@ -293,15 +293,31 @@ func (s *Sink) absorb(e Event) {
 			s.counter.BumpWafDetects(e.RouteID)
 		}
 	}
+	// === TEMP DIAG (diag/automation-trigger-trace) ===
+	// Every event this sink absorbs, with the exact action string + ts
+	// (Unix seconds) that will be persisted. Cross-checks the trigger's
+	// readWaf.probe: confirms the write side receives the events and shows
+	// what action/ts land in the table the trigger reads.
+	s.logger.Info("DIAG sink.absorb received",
+		slog.String("ruleID", e.RuleID),
+		slog.String("category", string(e.Category)),
+		slog.String("action", string(e.Action)),
+		slog.String("srcIP", e.SrcIP),
+		slog.Int64("tsUnix", e.Ts.UTC().Unix()),
+	)
+	// === /TEMP DIAG ===
 	if !s.lru.shouldEmit(e.RouteID, e.SrcIP, e.RuleID) {
 		atomic.AddUint64(&s.suppressedByLRU, 1)
+		s.logger.Info("DIAG sink.absorb dropped", slog.String("reason", "lru"), slog.String("ruleID", e.RuleID), slog.String("srcIP", e.SrcIP)) // TEMP DIAG
 		return
 	}
 	atomic.AddUint64(&s.emitted, 1)
 	s.mu.Lock()
 	s.pending = append(s.pending, e)
 	shouldFlush := len(s.pending) >= s.flushBatchSize
+	pendingLen := len(s.pending)
 	s.mu.Unlock()
+	s.logger.Info("DIAG sink.absorb buffered", slog.String("ruleID", e.RuleID), slog.String("srcIP", e.SrcIP), slog.Int("pending", pendingLen)) // TEMP DIAG
 	if shouldFlush {
 		s.flush(context.Background())
 	}
