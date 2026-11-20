@@ -18,6 +18,7 @@ package waf
 
 import (
 	"container/list"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -88,20 +89,24 @@ func (l *emitLRU) shouldEmit(routeID, srcIP, ruleID string) bool {
 
 	if elt, ok := l.idx[key]; ok {
 		entry := elt.Value.(*lruEntry)
-		if now.Sub(entry.ts) < l.ttl {
+		age := now.Sub(entry.ts)
+		if age < l.ttl {
 			// Recent — suppress this event row but bump the
 			// entry's freshness so future emits stay
 			// suppressed until ttl since this attempt.
+			slog.Default().Info("DIAG lru.shouldEmit", slog.String("srcIP", srcIP), slog.String("ruleID", ruleID), slog.String("decision", "suppress"), slog.Int64("ageMs", age.Milliseconds()), slog.Int64("ttlMs", l.ttl.Milliseconds())) // TEMP DIAG v3
 			entry.ts = now
 			l.ll.MoveToFront(elt)
 			return false
 		}
 		// Stale — replace timestamp, move to front, allow emit.
+		slog.Default().Info("DIAG lru.shouldEmit", slog.String("srcIP", srcIP), slog.String("ruleID", ruleID), slog.String("decision", "emit-stale"), slog.Int64("ageMs", age.Milliseconds())) // TEMP DIAG v3
 		entry.ts = now
 		l.ll.MoveToFront(elt)
 		return true
 	}
 
+	slog.Default().Info("DIAG lru.shouldEmit", slog.String("srcIP", srcIP), slog.String("ruleID", ruleID), slog.String("decision", "emit-firstsight")) // TEMP DIAG v3
 	// First sight of this triple — evict if needed, insert.
 	if l.cap > 0 && l.ll.Len() >= l.cap {
 		oldest := l.ll.Back()
