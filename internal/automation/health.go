@@ -57,6 +57,16 @@ type HealthSnapshot struct {
 	// cleared on the next success), so it is a recent error, not a
 	// tombstone.
 	LastPushError *string
+
+	// Memcounter* are the pre-LRU volume tracker's stats (v2.83.1),
+	// surfaced as arenet_automation_memcounter_* so an operator can see
+	// the tracker's pressure and tune the caps. Keys is the current
+	// retained (srcIP, source) key count; the Dropped* and Pruned are
+	// cumulative since boot.
+	MemcounterKeys             int
+	MemcounterDroppedCapKey    uint64
+	MemcounterDroppedCapGlobal uint64
+	MemcounterPrunedWindow     uint64
 }
 
 // HealthReporter is the read-only surface a metrics collector asserts
@@ -91,6 +101,11 @@ func (m *DefaultManager) HealthSnapshot() HealthSnapshot {
 		if msg, ok := m.engine.LastPushError(); ok {
 			snap.LastPushError = &msg
 		}
+		vs := m.engine.VolumeStats()
+		snap.MemcounterKeys = vs.Keys
+		snap.MemcounterDroppedCapKey = vs.DroppedCapKey
+		snap.MemcounterDroppedCapGlobal = vs.DroppedCapGlobal
+		snap.MemcounterPrunedWindow = vs.PrunedWindow
 	}
 	return snap
 }

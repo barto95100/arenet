@@ -674,8 +674,9 @@ paths:
 
         v1 exposes the auto-classify writer's health (otherwise a silent
         failure): `arenet_automation_writer_login_failed` (gauge) and
-        `arenet_automation_pushes_total{result}` (counter). See
-        `docs/operations/monitoring.md`.
+        `arenet_automation_pushes_total{result}` (counter). v2.83.1 adds the
+        pre-LRU volume tracker's `arenet_automation_memcounter_*` series
+        (keys gauge + cap/prune counters). See `docs/operations/monitoring.md`.
       responses:
         '200':
           description: Prometheus text exposition.

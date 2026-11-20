@@ -19,6 +19,7 @@ package main
 import (
 	"net"
 
+	"github.com/barto95100/arenet/internal/automation"
 	"github.com/barto95100/arenet/internal/countryblock"
 	"github.com/barto95100/arenet/internal/crowdsec"
 	"github.com/barto95100/arenet/internal/geo"
@@ -62,11 +63,22 @@ type geoForwardingWafSink struct {
 	bus      *geo.Bus
 	enricher *geo.Enricher
 	inner    waf.EventSink
+	// volume is the pre-LRU tap for Security Automation (v2.83.1). Every
+	// Emit here precedes the inner sink's channel + LRU dedup, so feeding
+	// the tracker from this point gives the trigger engine true request
+	// volume per (srcIP, source) instead of the LRU-deduplicated table
+	// count. Only BLOCK events are observed — detect-mode events must never
+	// contribute to a ban (the v2.58.4 invariant, now enforced at this
+	// gate). nil-safe (degraded wiring).
+	volume *automation.VolumeTracker
 }
 
 func (g geoForwardingWafSink) Emit(e waf.Event) {
 	if g.bus != nil && g.enricher != nil {
 		g.bus.Publish(g.enricher.EnrichWAFEvent(e))
+	}
+	if g.volume != nil && e.Action == waf.ActionBlock {
+		g.volume.ObserveWafBlock(e.SrcIP, string(e.Category), e.Ts)
 	}
 	if g.inner != nil {
 		g.inner.Emit(e)
@@ -81,9 +93,17 @@ type geoForwardingThrottleSink struct {
 	bus      *geo.Bus
 	enricher *geo.Enricher
 	inner    throttle.EventSink
+	// volume is the pre-LRU tap, mirror of the WAF wrapper (v2.83.1). The
+	// throttle sink carries the same 60s LRU, so its automation count had
+	// the same single-vector starvation bug. Every throttle event is a
+	// refusal, so all are observed. nil-safe.
+	volume *automation.VolumeTracker
 }
 
 func (g geoForwardingThrottleSink) Emit(e throttle.Event) {
+	if g.volume != nil {
+		g.volume.ObserveThrottle(e.SrcIP, e.Tier, e.Ts)
+	}
 	if g.bus != nil && g.enricher != nil {
 		// The enricher consumes the observability.ThrottleEvent
 		// shape (the storage-flat sibling of throttle.Event);

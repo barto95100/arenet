@@ -1012,6 +1012,13 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// metrics.SetRegistry — Caddy provisions modules from
 	// JSON config and cannot inject Go pointers, so a
 	// package-singleton is the only path.
+	// v2.83.1 — the pre-LRU volume tracker for Security Automation. Created
+	// here so the WAF + throttle geo-forwarders (below) can tap every event
+	// BEFORE the sink's LRU dedup, and wired as the trigger engine's WAF +
+	// throttle readers in wireAutomation. One instance serves both families.
+	// Pure memory, no obsStore dependency — works in the degraded path too.
+	automationVolume := automation.NewVolumeTracker(nil)
+
 	wafSink := waf.NewSink(wafInserterAdapter{obsStore}, obsAggregator, logger, waf.SinkConfig{})
 	// Step V.3 — wrap the production sink with the
 	// geo-forwarding adapter so every WAF block also lands on
@@ -1019,7 +1026,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// event to the bus, then delegates to the wrapped sink for
 	// persistence + counter bump. Both inner sink and bus are
 	// nil-safe at the wrapper; the data plane is unaffected.
-	waf.SetGlobalSink(geoForwardingWafSink{bus: geoBus, enricher: geoEnricher, inner: wafSink})
+	waf.SetGlobalSink(geoForwardingWafSink{bus: geoBus, enricher: geoEnricher, inner: wafSink, volume: automationVolume})
 	wafCtx, wafCancel := context.WithCancel(ctx)
 	var wafWG sync.WaitGroup
 	wafWG.Add(1)
@@ -1054,7 +1061,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	throttleSink := throttle.NewSink(throttleInserterAdapter{obsStore}, obsAggregator, logger, throttle.SinkConfig{})
 	// Step V.3 — geo-forwarding wrapper, mirror of the WAF
 	// install above.
-	throttle.SetGlobalSink(geoForwardingThrottleSink{bus: geoBus, enricher: geoEnricher, inner: throttleSink})
+	throttle.SetGlobalSink(geoForwardingThrottleSink{bus: geoBus, enricher: geoEnricher, inner: throttleSink, volume: automationVolume})
 	throttleCtx, throttleCancel := context.WithCancel(ctx)
 	var throttleWG sync.WaitGroup
 	throttleWG.Add(1)
@@ -1708,7 +1715,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// the data plane is unaffected.
 	automationEngineCtx, automationEngineCancel := context.WithCancel(ctx)
 	var automationWG sync.WaitGroup
-	if err := wireAutomation(automationEngineCtx, &automationWG, store, obsStore, auditStore, crowdsecSink, logger); err != nil {
+	if err := wireAutomation(automationEngineCtx, &automationWG, store, obsStore, auditStore, crowdsecSink, automationVolume, logger); err != nil {
 		logger.Warn("automation: trigger engine disabled", "err", err)
 	}
 	defer func() {

@@ -151,6 +151,12 @@ type EngineConfig struct {
 	Throttle ThrottleEventReader
 	Audit    AuditEventReader
 
+	// Volume is the in-memory pre-LRU volume tracker (v2.83.1). In
+	// production it is the SAME *VolumeTracker wired as Waf + Throttle;
+	// held here as a typed reference so HealthSnapshot can surface its
+	// cap/prune stats as Prometheus metrics. Optional (nil → zero stats).
+	Volume *VolumeTracker
+
 	// Writer is the static writer (test path + the
 	// pre-P.3 wiring). When set, EngineConfig.Writer is
 	// used for every intent.
@@ -337,6 +343,15 @@ func (e *Engine) Run(ctx context.Context) {
 // + callers use it to await clean shutdown.
 func (e *Engine) Done() <-chan struct{} { return e.done }
 
+// VolumeStats returns the pre-LRU volume tracker's cap/prune counters for the
+// metrics collector, or the zero value when no tracker is wired.
+func (e *Engine) VolumeStats() TrackerStats {
+	if e.cfg.Volume == nil {
+		return TrackerStats{}
+	}
+	return e.cfg.Volume.Stats()
+}
+
 // SetWriterProvider injects the recreate-and-swap writer
 // accessor at boot time. Used by cmd/arenet/main.go to wire
 // the DefaultManager — the Engine reads currentWriter() per
@@ -464,6 +479,14 @@ func (e *Engine) tick(ctx context.Context) {
 		select {
 		case e.intents <- intent:
 			e.totalIntentsEmit.Add(1)
+			// D8 re-emit guard (v2.83.1). The volume tracker retains events
+			// for the whole Window (no advancing cursor any more), so without
+			// this the NEXT tick would re-read the same events and re-emit
+			// before the LAPI mirror reflects the push — a ban loop. Record
+			// the dedupe as active immediately (mark-then-mirror): the next
+			// tick sees it active and skips. Cleared by OnTombstone (operator
+			// unban) or the dedupe TTL.
+			e.dedupe.Record("Ip", k.SrcIP, scenario, true)
 		default:
 			// Buffer full → drop. AC #13 / D7.A. The
 			// source events stay in their tables.
@@ -472,21 +495,35 @@ func (e *Engine) tick(ctx context.Context) {
 	}
 }
 
-// readWaf executes the WAF event read for this tick. Cursor
-// advances to max(event.Ts) so the next tick reads only
-// new events.
-func (e *Engine) readWaf(ctx context.Context, now time.Time) []SourceEvent {
-	e.cursorMu.Lock()
-	cursor := e.cursor[SourceWafSQLi] // any waf source shares the cursor — they share the table
-	if cursor.IsZero() {
-		// Defensive: an enum extension that adds a new
-		// source without re-init should still tick.
-		cursor = now.Add(-tickInterval)
+// maxEnabledWindow returns the largest Window among enabled rules whose Source
+// satisfies want, or 0 when none is enabled. It bounds how far back a single
+// read pass looks; tick()'s per-rule window recount still applies each rule's
+// own Window to the returned events.
+func maxEnabledWindow(rs RuleSet, want func(Source) bool) time.Duration {
+	var m time.Duration
+	for s, r := range rs.Rules {
+		if r.Enabled && want(s) && r.Window > m {
+			m = r.Window
+		}
 	}
-	e.cursorMu.Unlock()
+	return m
+}
 
+// readWaf reads the WAF volume for this tick from the in-memory volume tracker
+// (wired as cfg.Waf in production; a fake in tests). v2.83.1: it queries the
+// FULL current window [now-maxWindow, now] every tick instead of advancing a
+// cursor past events. The cursor model counted each event once, so a burst had
+// to land inside one ~5 s tick to meet a threshold (the secondary bug); and the
+// old DB reader returned the LRU-deduplicated row count (the primary bug). The
+// tracker returns the true pre-LRU volume over the whole window; the lingering
+// window is kept from re-emitting by the D8 dedupe guard in tick().
+func (e *Engine) readWaf(ctx context.Context, now time.Time) []SourceEvent {
+	w := maxEnabledWindow(e.cfg.Rules.Get(), isWafSource)
+	if w <= 0 {
+		return nil // no enabled WAF rule → nothing to read
+	}
 	events, err := e.cfg.Waf.QueryWafEvents(ctx, WafFilter{
-		From:  cursor,
+		From:  now.Add(-w),
 		To:    now,
 		Limit: queryLimit,
 	})
@@ -494,73 +531,25 @@ func (e *Engine) readWaf(ctx context.Context, now time.Time) []SourceEvent {
 		e.cfg.Logger.Warn("automation: waf read failed", "err", err)
 		return nil
 	}
-
-	// Advance cursor to the latest event ts we observed.
-	// If we hit the queryLimit, leave the cursor at the
-	// observed-max — next tick reads the remainder.
-	if len(events) > 0 {
-		var maxTs time.Time
-		for _, ev := range events {
-			if ev.Ts.After(maxTs) {
-				maxTs = ev.Ts
-			}
-		}
-		e.cursorMu.Lock()
-		for _, src := range []Source{
-			SourceWafSQLi, SourceWafXSS, SourceWafRCE,
-			SourceWafLFI, SourceWafProtocol, SourceWafOther,
-		} {
-			if maxTs.After(e.cursor[src]) {
-				e.cursor[src] = maxTs
-			}
-		}
-		e.cursorMu.Unlock()
-	} else {
-		e.advanceCursor(SourceWafSQLi, now)
-		e.advanceCursor(SourceWafXSS, now)
-		e.advanceCursor(SourceWafRCE, now)
-		e.advanceCursor(SourceWafLFI, now)
-		e.advanceCursor(SourceWafProtocol, now)
-		e.advanceCursor(SourceWafOther, now)
-	}
 	return events
 }
 
+// readThrottle mirrors readWaf for throttle events (the throttle sink carries
+// the same LRU, so it had the same bug). Audit is NOT changed: it reads its own
+// store, which has no LRU, and keeps its cursor (readAudit below).
 func (e *Engine) readThrottle(ctx context.Context, now time.Time) []SourceEvent {
-	e.cursorMu.Lock()
-	cursor := e.cursor[SourceThrottleTier1]
-	if cursor.IsZero() {
-		cursor = now.Add(-tickInterval)
+	w := maxEnabledWindow(e.cfg.Rules.Get(), isThrottleSource)
+	if w <= 0 {
+		return nil
 	}
-	e.cursorMu.Unlock()
-
 	events, err := e.cfg.Throttle.QueryThrottleEvents(ctx, ThrottleFilter{
-		From:  cursor,
+		From:  now.Add(-w),
 		To:    now,
 		Limit: queryLimit,
 	})
 	if err != nil {
 		e.cfg.Logger.Warn("automation: throttle read failed", "err", err)
 		return nil
-	}
-
-	if len(events) > 0 {
-		var maxTs time.Time
-		for _, ev := range events {
-			if ev.Ts.After(maxTs) {
-				maxTs = ev.Ts
-			}
-		}
-		e.cursorMu.Lock()
-		for _, src := range []Source{SourceThrottleTier1, SourceThrottleTier2} {
-			if maxTs.After(e.cursor[src]) {
-				e.cursor[src] = maxTs
-			}
-		}
-		e.cursorMu.Unlock()
-	} else {
-		e.advanceCursor(SourceThrottleTier1, now)
-		e.advanceCursor(SourceThrottleTier2, now)
 	}
 	return events
 }

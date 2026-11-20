@@ -291,6 +291,7 @@ func wireAutomation(
 	obsStore *observability.Store,
 	auditStore *audit.Store,
 	crowdsecSink *crowdsec.Sink,
+	volume *automation.VolumeTracker,
 	logger *slog.Logger,
 ) error {
 	// Load rules from BoltDB (DefaultRuleSet on fresh install).
@@ -337,8 +338,19 @@ func wireAutomation(
 	}
 
 	engine, err := automation.NewEngine(automation.EngineConfig{
-		Waf:           automationWafReader{store: obsStore},
-		Throttle:      automationThrottleReader{store: obsStore},
+		// v2.83.1 — the WAF + throttle readers are now the in-memory
+		// pre-LRU volume tracker, not the LRU-deduplicated obsStore
+		// tables. The tables (written by the sinks, unchanged) stay the
+		// forensic/UI record; the trigger counts true request volume so a
+		// single attack vector can actually cross a threshold. The
+		// block-only filter (detect must never ban) is enforced at the
+		// geoForwardingWafSink gate feeding the tracker. The DB-backed
+		// automationWafReader/automationThrottleReader are retained (and
+		// still tested) but no longer wired into the trigger. Audit is
+		// unchanged: its store has no LRU.
+		Waf:           volume,
+		Throttle:      volume,
+		Volume:        volume, // typed handle for HealthSnapshot stats (same instance)
 		Audit:         automationAuditReader{store: auditStore},
 		DedupeChecker: automationDedupeChecker{store: obsStore},
 		AuditEmitter:  automationAuditEmitter{store: auditStore},
