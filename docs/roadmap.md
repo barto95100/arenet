@@ -101,6 +101,10 @@ No ordering commitment — each item gets its own brainstorm → spec → plan c
 - Per-route DNS provider selection; DNS-01 propagation settings (resolvers, timeout)
 
 ### Security
+- Security Automation ban visibility in-UI (v2.84.0, deferred D11 from the
+  v2.83.1 pre-LRU volume fix): `lastBanIssuedAt` + `totalBansIssued24h` on the
+  automation health block, and a deep-link to Posture › CrowdSec › Live LAPI
+  filtered on `origin=arenet`. (`LastPushAt` already covers "did a ban fire?".)
 - Threat export: CSV of malicious IPs, iptables / FortiGate rule generators
 - Outbound security webhooks with HMAC signature + retry
 - Other IP-reputation feeds (e.g. AbuseIPDB)

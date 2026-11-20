@@ -63,9 +63,13 @@ func automationSnapshotFromGlobal() (automation.HealthSnapshot, bool) {
 // It holds no state of its own beyond the descriptors — every value is
 // read live from the snapshot function at Collect time.
 type automationCollector struct {
-	snapshot    automationSnapshot
-	loginFailed *prometheus.Desc
-	pushes      *prometheus.Desc
+	snapshot          automationSnapshot
+	loginFailed       *prometheus.Desc
+	pushes            *prometheus.Desc
+	memcounterKeys    *prometheus.Desc
+	memDroppedCapKey  *prometheus.Desc
+	memDroppedCapGlob *prometheus.Desc
+	memPrunedWindow   *prometheus.Desc
 }
 
 func newAutomationCollector(snapshot automationSnapshot) *automationCollector {
@@ -81,6 +85,29 @@ func newAutomationCollector(snapshot automationSnapshot) *automationCollector {
 			"Auto-classify decisions pushed to CrowdSec LAPI, by result: success, permanent (dropped on a non-retryable error — bad credential or rejected payload, the signal that needs a human), dropped (retry-exhausted against an unreachable LAPI).",
 			[]string{"result"}, nil,
 		),
+		// v2.83.1 — the pre-LRU volume tracker that feeds the threshold
+		// check. Watch keys_total approaching its cap or dropped_capglobal
+		// rising to decide whether to widen the cap.
+		memcounterKeys: prometheus.NewDesc(
+			"arenet_automation_memcounter_keys_total",
+			"Current retained (srcIP, source) keys in the auto-classify pre-LRU volume tracker.",
+			nil, nil,
+		),
+		memDroppedCapKey: prometheus.NewDesc(
+			"arenet_automation_memcounter_dropped_capkey_total",
+			"Events dropped because a (srcIP, source) key hit its per-key cap (cumulative).",
+			nil, nil,
+		),
+		memDroppedCapGlob: prometheus.NewDesc(
+			"arenet_automation_memcounter_dropped_capglobal_total",
+			"Keys evicted because the tracker hit its global key cap (cumulative).",
+			nil, nil,
+		),
+		memPrunedWindow: prometheus.NewDesc(
+			"arenet_automation_memcounter_pruned_window_total",
+			"Records pruned from the tracker by window-expiry (cumulative).",
+			nil, nil,
+		),
 	}
 }
 
@@ -88,6 +115,10 @@ func newAutomationCollector(snapshot automationSnapshot) *automationCollector {
 func (c *automationCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.loginFailed
 	ch <- c.pushes
+	ch <- c.memcounterKeys
+	ch <- c.memDroppedCapKey
+	ch <- c.memDroppedCapGlob
+	ch <- c.memPrunedWindow
 }
 
 // Collect implements prometheus.Collector. Reads one snapshot and emits
@@ -104,6 +135,11 @@ func (c *automationCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.pushes, prometheus.CounterValue, float64(snap.PushSuccess), "success")
 	ch <- prometheus.MustNewConstMetric(c.pushes, prometheus.CounterValue, float64(snap.PushPermanent), "permanent")
 	ch <- prometheus.MustNewConstMetric(c.pushes, prometheus.CounterValue, float64(snap.PushDropped), "dropped")
+
+	ch <- prometheus.MustNewConstMetric(c.memcounterKeys, prometheus.GaugeValue, float64(snap.MemcounterKeys))
+	ch <- prometheus.MustNewConstMetric(c.memDroppedCapKey, prometheus.CounterValue, float64(snap.MemcounterDroppedCapKey))
+	ch <- prometheus.MustNewConstMetric(c.memDroppedCapGlob, prometheus.CounterValue, float64(snap.MemcounterDroppedCapGlobal))
+	ch <- prometheus.MustNewConstMetric(c.memPrunedWindow, prometheus.CounterValue, float64(snap.MemcounterPrunedWindow))
 }
 
 var (

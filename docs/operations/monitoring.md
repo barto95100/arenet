@@ -42,6 +42,10 @@ which otherwise fails silently when its machine credential breaks.
 | `arenet_automation_pushes_total{result="success"}` | counter | Bans successfully pushed to LAPI. |
 | `arenet_automation_pushes_total{result="permanent"}` | counter | Dropped on a non-retryable error (bad credential or rejected payload) — the signal that needs a human. |
 | `arenet_automation_pushes_total{result="dropped"}` | counter | Dropped after retry exhaustion against an unreachable LAPI. |
+| `arenet_automation_memcounter_keys_total` | gauge | **v2.83.1+**. Retained `(srcIP, source)` keys in the pre-LRU volume tracker that feeds the threshold check. Small under normal traffic; climbs only under a broad multi-IP attack. Approaching its cap (4096) ⇒ consider widening. |
+| `arenet_automation_memcounter_dropped_capkey_total` | counter | Events dropped because one `(srcIP, source)` key hit its per-key cap (64). Harmless for the decision (the cap stays far above any threshold); a high rate just means a very loud single vector. |
+| `arenet_automation_memcounter_dropped_capglobal_total` | counter | Keys evicted because the tracker hit its global key cap. Sustained rise ⇒ many distinct attacking IPs; widen the cap or lean on the bouncer/rate-limit for the volumetric layer. |
+| `arenet_automation_memcounter_pruned_window_total` | counter | Records pruned by window-expiry. Informational. |
 
 ### In the UI, without a scraper (v2.83.0+)
 
