@@ -126,8 +126,92 @@ trigger.tick() → readWaf/readThrottle → tracker.Query(maxWindow)  [was: obsS
 - **G6 (non-regression)** — audit/auth-failure path unchanged; detect-mode WAF
   events still never ban; `/healthz` and the automation health block untouched.
 
+## A. Memory bounds (D7 concrete values)
+
+Package-level constants, no UI knob (tune via the B metrics if saturation shows):
+
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `maxEventsPerKey` | **64** | Ring per `(srcIP, Source)`; drop-oldest when full. Far above the max default `Threshold` (10). Once at cap, the count is known `≥` any realistic threshold, so dropping older events never flips a decision. |
+| `maxKeysGlobal` | **4096** | Distinct `(srcIP, Source)` pairs retained; LRU-evict the oldest when full (oldest ⇒ least likely still inside a window). |
+| retention | `maxEnabledWindow` | Entries older than the largest enabled rule `Window` are pruned each observe/tick. |
+
+**Memory envelope** (per-event record ≈ a `time.Time`, 24 B; per-key overhead ≈
+key string + map/list node):
+
+- **Idle / normal homelab (10 routes):** WAF/throttle events fire only on an
+  actual match or refusal, so the tracker holds a handful of keys with a few
+  events each — **< 100 KB**, near zero when nothing is being attacked.
+- **Under active attack:** one attacking IP = **one key** regardless of volume
+  (capped at 64 events). A broad scan from N IPs = N keys until `maxKeysGlobal`,
+  then LRU eviction. Hard ceiling ≈ `4096 × 64 × 24 B` + overhead ≈ **~8 MB**;
+  steady-state far below, because prune-to-`maxWindow` drops idle keys.
+
+Single-vector persistent attackers (the automation target) are always captured;
+volumetric/DDoS saturation is explicitly out of scope (bouncer + rate-limit).
+
+## B. Observability of the tracker (Prometheus)
+
+Mirror the existing `automationCollector` pattern
+(`internal/api/metrics_prometheus.go` reads `automation.HealthSnapshot`): extend
+the snapshot with the tracker's atomic stats; the collector emits:
+
+| Metric | Type | Meaning |
+|--------|------|---------|
+| `arenet_automation_memcounter_keys_total` | gauge | Current retained `(srcIP, Source)` key count. |
+| `arenet_automation_memcounter_dropped_capkey_total` | counter | Events dropped because a key hit `maxEventsPerKey`. |
+| `arenet_automation_memcounter_dropped_capglobal_total` | counter | Keys evicted because the tracker hit `maxKeysGlobal`. |
+| `arenet_automation_memcounter_pruned_window_total` | counter | Entries pruned by window-expiry. |
+
+Zeros emitted in degraded mode (series always exist for alerting). `keys_total`
+climbing toward 4096 or `dropped_capglobal` rising ⇒ widen the cap. Added to
+`docs/operations/monitoring.md` and the OpenAPI metrics note.
+
+## C. Test shapes (G1/G2 — both levels)
+
+- **G1 WAF — unit** (`volume_test.go`): `Observe` N identical
+  `(srcIP, waf-rce, ts≈now)` → `Query(now, window)` returns **N** records (NOT
+  1) — proves no dedup. Plus cap/evict/prune/concurrency (`-race`) = G4.
+- **G1 WAF — integration** (`volume_trigger_test.go`): feed N identical WAF
+  block events through the tracker-backed `readWaf`, drive `tick()` with a fake
+  writer capturing intents → **exactly one** intent when `N ≥ Threshold`, none
+  when `N < Threshold`. This is the test that must **fail first** on the
+  table-count path (reinject per `[[guard]]`).
+- **G2 throttle** — the same two levels for `(srcIP, tier)`: unit proves
+  identical bursts traverse the tracker **without** dedup; integration proves
+  the throttle rule fires at `N ≥ Threshold`.
+- **G3 cross-tick** — identical events delivered across several `tick()` calls
+  inside `Window` trigger **exactly once** (D8 guard: not once per tick).
+
+## D9–D11. LAPI visibility of auto-bans
+
+- **D9 scenario — ALREADY DONE.** `Source.Scenario()` returns `"arenet/" +
+  source` (`rules.go:71`): `arenet/waf-rce`, `arenet/waf-sqli`,
+  `arenet/throttle-tier1`, … The Posture page's `scenario.startsWith("arenet/")`
+  filter already distinguishes them from native/CAPI scenarios. No change.
+- **D10 origin — ALREADY DONE.** The pushed `AlertDecision.Origin = "arenet"`
+  (`watcher_client.go:295-301`), distinct from `cscli`/`crowdsec`/`CAPI`; LAPI
+  accepts it. The Live LAPI tab can filter `origin=arenet`. No change.
+- **D11 UI deep-link + 24 h counter — OUT OF SCOPE for v2.83.1 (recommended
+  follow-up v2.84.0).** The health block already exposes `LastPushAt`
+  (≈ "did a ban just fire?") and `LastPushError` (PR #350). The genuinely new
+  surface — `totalBansIssued24h` and a deep-link to Posture › Live LAPI filtered
+  on `origin=arenet` — is a UI feature, not part of the threshold bugfix.
+  Bundling it would contradict "patch, no new user-facing surface" and widen the
+  blast radius of the critical fix. Recommendation: ship the fix as v2.83.1, add
+  D11 as a small follow-up. (Operator may elect to bundle; flagged, not decided.)
+
 ## Rollout
 
 Fix on `fix/automation-prelru-volume`, distinct from the throwaway
 `diag/automation-trigger-trace` (which the operator drops after this lands). PR →
 merge → operator tags v2.83.1 → dogfood gate G5 on AreNET-test before closing.
+
+**Mandatory release note (operator's wording, behaviour-change warning):**
+
+> Fix : le seuil de la Security Automation est maintenant compté **par requête**
+> au lieu d'être dédupliqué par `(srcIP, ruleID)` sur 60 s. Les auto-bans vont se
+> déclencher là où rien ne se passait avant — c'est le comportement promis.
+
+This is a behaviour change, not a silent fix: operators who enabled rules and saw
+nothing will suddenly see bans. The note must be prominent in the v2.83.1 release.

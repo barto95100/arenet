@@ -13,13 +13,16 @@ it pass, then the defect is reinjected (`cp`, never `git checkout`).
 
 ## T0 — Guard golden / failing test first (no production change)
 
-- Add `internal/automation/volume_trigger_test.go`:
-  - **G1**: a harness that feeds N identical WAF `(srcIP, rule, route, ts≈now)`
-    events, drives one (or a few) ticks, and asserts exactly one intent when
-    `N ≥ Threshold`, none when `N < Threshold`.
+- Add `internal/automation/volume_trigger_test.go` (integration, spec §C):
+  - **G1**: feed N identical WAF `(srcIP, rule, route, ts≈now)` events through
+    the tracker-backed `readWaf`, drive `tick()` with a fake writer capturing
+    intents, assert **exactly one** intent when `N ≥ Threshold`, none when
+    `N < Threshold`.
   - Written against the **current** engine first (fake reader returning the
     LRU-deduped 1 row) → watch it FAIL (n=1 < threshold). Commit the red test
     shape in its own commit so the diff proves the defect.
+- `volume_test.go` unit level (spec §C): `Observe` N identical → `Query` returns
+  **N** (not 1). This is also where G4 (cap/evict/prune/`-race`) lives.
 - No `-update`, no production edit in this commit.
 
 ## T1 — The volume tracker (`internal/automation/volume.go`)
@@ -29,12 +32,17 @@ it pass, then the defect is reinjected (`cp`, never `git checkout`).
   `{ts, triggeringRef}`; **per-key cap K** (drop oldest), **global key cap**
   with LRU eviction, prune entries older than the tracker's configured retention
   (= `maxEnabledWindow`, refreshed from the rule set each tick).
+- Caps (spec §A): `maxEventsPerKey = 64`, `maxKeysGlobal = 4096`, retain to
+  `maxEnabledWindow`.
+- Atomic stats for the B metrics: `keysTotal` (gauge-read), `droppedCapKey`,
+  `droppedCapGlobal`, `prunedWindow` (counters). Surfaced via `HealthSnapshot`.
 - API:
   - `Observe(srcIP string, source Source, ts time.Time, ref string)`
   - `Query(now time.Time, within time.Duration) []SourceEvent` — every retained
     event newer than `now-within`, projected to the engine's `SourceEvent`
     shape with the synthetic `TriggeringEventID` (D6).
   - `SetRetention(d time.Duration)` / prune.
+  - `Stats() TrackerStats` — for the collector.
 - Unit tests: TTL expiry, per-key cap, global LRU eviction, concurrency
   (`-race`). This is **G4**.
 
@@ -74,6 +82,14 @@ it pass, then the defect is reinjected (`cp`, never `git checkout`).
   → confirm they fail; restore; `diff -q` RESTORED.
 - Confirm G1 (WAF) and G2 (throttle) fail **independently** — one reinjection
   must not fail the other's assertion (one mechanism, one test).
+
+## T4b — Prometheus metrics (spec §B)
+
+- Extend `automation.HealthSnapshot` with the four tracker stats.
+- Extend `automationCollector` (`internal/api/metrics_prometheus.go`) with the
+  four descriptors + `Collect` emission (zeros in degraded mode).
+- Update `docs/operations/monitoring.md` + the OpenAPI metrics note
+  (`openapi-route-must-be-documented` — metrics text is covered there).
 
 ## T5 — Full suite + non-regression (G6)
 
