@@ -94,6 +94,14 @@ type automationHealth struct {
 	// LastPushError is the message of the most recent failed push, or
 	// nil (cleared on the next success — see automation.HealthSnapshot).
 	LastPushError *string `json:"lastPushError"`
+	// D11 (v2.84.0) ban-activity view for the in-UI "recent bans" line.
+	// TotalBansIssued24h is an in-memory rolling count (resets on restart;
+	// LAPI is the ledger). LastBanScenario/LastBanSrcIP are the most recent
+	// ban's context, at the LastPushAt instant (which is also "last ban
+	// issued at" — v1.3 only issues bans); nil when none issued yet.
+	TotalBansIssued24h int     `json:"totalBansIssued24h"`
+	LastBanScenario    *string `json:"lastBanScenario"`
+	LastBanSrcIP       *string `json:"lastBanSrcIp"`
 }
 
 type credentialsResponse struct {
@@ -171,6 +179,9 @@ func (h *Handler) getAutomation(w http.ResponseWriter, r *http.Request) {
 			health.LastPushAt = &s
 		}
 		health.LastPushError = snap.LastPushError
+		health.TotalBansIssued24h = snap.TotalBansIssued24h
+		health.LastBanScenario = snap.LastBanScenario
+		health.LastBanSrcIP = snap.LastBanSrcIP
 	}
 
 	writeJSON(w, http.StatusOK, automationResponse{

@@ -37,6 +37,23 @@
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 
+	// v2.84.0 (D11.b) — optional deep-link origin. The settings
+	// ban-activity card links to /security?tab=crowdsec&origin=arenet;
+	// the parent /sécurité page reads the ?origin= query param and
+	// forwards it here. ONLY an explicit origin pre-selects a filter —
+	// arriving on the CrowdSec tab with no ?origin= leaves the default
+	// (snapshot tab, "Toutes" origin) untouched (no hijack). Passed as a
+	// prop, not read from $app/state here, so the component stays
+	// routing-agnostic and testable without a router mock.
+	let { initialOrigin }: { initialOrigin?: string } = $props();
+	// Only 'arenet' is a recognised deep-link target today; any other
+	// value is ignored and the panel opens on its default. This is a
+	// one-time snapshot of the deep-link at construction — the panel's
+	// tab state is operator-owned after that, so a later prop change
+	// must NOT yank the active tab. The capture is intentional.
+	// svelte-ignore state_referenced_locally
+	const initialArenet = initialOrigin === 'arenet';
+
 	// Step CS.3 Commit D — admin gate for the "Bannir une IP"
 	// button. Mirrors the backend RequireAdminMiddleware on
 	// POST /api/v1/security/crowdsec/decisions. Viewer-role
@@ -59,7 +76,10 @@
 	}
 
 	type Tab = 'snapshot' | 'live' | 'scenarios';
-	let activeTab = $state<Tab>('snapshot');
+	// A deep-link to ?origin=arenet lands on the Live sub-tab, because
+	// the origin filter only exists there. Otherwise the default is the
+	// local snapshot, as before.
+	let activeTab = $state<Tab>(initialArenet ? 'live' : 'snapshot');
 
 	// Tab descriptors consumed by the Tabs component (CS.3
 	// extraction). Existing data-testid values preserved so the
@@ -125,14 +145,19 @@
 	//                  Arenet) DO land in Locales — they were
 	//                  authored on the LAPI host, which matches
 	//                  the operator's mental model.
+	//   - 'arenet'     origin === 'arenet' (v2.84.0 D11.b — bans this
+	//                  install auto-pushed via the watcher-writer; the
+	//                  deep-link target from the settings ban-activity
+	//                  card)
 	//   - 'capi'       origin === 'CAPI'
 	//   - 'manual'     origin === 'manual'
 	// Backend filter is no longer used: we fetch the full
 	// page once and filter client-side. The breakdown counts
 	// per tab use the FULL response (pre-filter), so toggling
 	// tabs never under-counts.
-	type LiveOriginTab = 'all' | 'local' | 'capi' | 'manual';
-	let liveOriginTab = $state<LiveOriginTab>('all');
+	type LiveOriginTab = 'all' | 'arenet' | 'local' | 'capi' | 'manual';
+	// Pre-select the AreNET filter only on an explicit deep-link.
+	let liveOriginTab = $state<LiveOriginTab>(initialArenet ? 'arenet' : 'all');
 	let liveLastFetched = $state<number | null>(null);
 	// 30s polling tick. Set up when the user opens the Live
 	// tab; torn down when leaving (or on component destroy).
@@ -469,6 +494,11 @@
 		return o === 'crowdsec' || o === 'cscli';
 	}
 	const liveCountAll = $derived(liveMeta.total);
+	// v2.84.0 D11.b — count of arenet-pushed decisions in the full
+	// response. Keyed on the raw origin "arenet" (the watcher-writer
+	// posts origin:"arenet"; the backend byOrigin map keys on it
+	// verbatim — see internal/api/crowdsec_decisions.go).
+	const liveCountArenet = $derived(liveMeta.totalByOrigin['arenet'] ?? 0);
 	const liveCountLocal = $derived(
 		Object.entries(liveMeta.totalByOrigin)
 			.filter(([o]) => isLocalOrigin(o))
@@ -487,6 +517,9 @@
 		ReadonlyArray<{ id: LiveOriginTab; label: string; testId: string }>
 	>([
 		{ id: 'all', label: `Toutes (${liveCountAll})`, testId: 'live-tab-all' },
+		// AreNET sits right after "Toutes" — it is the operator's own
+		// product, so its bans are the first filter they reach for.
+		{ id: 'arenet', label: `AreNET (${liveCountArenet})`, testId: 'live-tab-arenet' },
 		{ id: 'local', label: `Locales (${liveCountLocal})`, testId: 'live-tab-local' },
 		{ id: 'capi', label: `CAPI (${liveCountCAPI})`, testId: 'live-tab-capi' },
 		{ id: 'manual', label: `Manuelles (${liveCountManual})`, testId: 'live-tab-manual' }
@@ -500,6 +533,8 @@
 			switch (liveOriginTab) {
 				case 'all':
 					return true;
+				case 'arenet':
+					return d.origin === 'arenet';
 				case 'local':
 					return isLocalOrigin(d.origin);
 				case 'capi':
@@ -574,7 +609,14 @@
 	}
 
 	onMount(() => {
+		// Load the snapshot in the background regardless, so switching
+		// back to it after a ?origin=arenet deep-link isn't a cold tab.
 		void loadSnapshot();
+		// On an explicit deep-link, open the Live tab and start its
+		// polling (activeTab/liveOriginTab are already pre-set above).
+		if (initialArenet) {
+			startLivePolling();
+		}
 	});
 
 	onDestroy(() => {

@@ -1715,7 +1715,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// the data plane is unaffected.
 	automationEngineCtx, automationEngineCancel := context.WithCancel(ctx)
 	var automationWG sync.WaitGroup
-	if err := wireAutomation(automationEngineCtx, &automationWG, store, obsStore, auditStore, crowdsecSink, automationVolume, logger); err != nil {
+	if err := wireAutomation(automationEngineCtx, &automationWG, store, obsStore, auditStore, crowdsecSink, automationVolume, geoLookup, asnLookup, logger); err != nil {
 		logger.Warn("automation: trigger engine disabled", "err", err)
 	}
 	defer func() {

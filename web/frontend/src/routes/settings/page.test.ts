@@ -380,3 +380,93 @@ describe('Settings page — Security Automation badge (v2.83)', () => {
 		expect(badge.getAttribute('data-state')).toBe('degraded');
 	});
 });
+
+// v2.84.0 (D11.b) — the ban-activity card in the Security Automation
+// panel. It reads the three new health fields (totalBansIssued24h,
+// lastBanScenario, lastBanSrcIp) plus the existing lastPushAt (decision
+// (c): the ban timestamp reuses lastPushAt). Load-bearing: the empty
+// state when nothing has been banned, and the deep-link href that
+// pre-selects the AreNET origin filter on the CrowdSec page.
+describe('Settings page — ban-activity card (v2.84.0 D11.b)', () => {
+	const enabledRule = {
+		enabled: true,
+		threshold: 2,
+		window_ns: 60e9,
+		duration_ns: 3600e9,
+		cooldown_ns: 86400e9
+	};
+
+	function healthWith(over: Record<string, unknown>) {
+		return {
+			rules: { rules: { 'waf-rce': enabledRule } },
+			credentials: { lapiUrl: 'http://x', machineId: 'm', configured: true },
+			engineRunning: true,
+			health: {
+				writerHealthy: true,
+				totalPushSuccess: 0,
+				totalPushPermanent: 0,
+				totalPushDropped: 0,
+				lastPushAt: null,
+				lastPushError: null,
+				totalBansIssued24h: 0,
+				lastBanScenario: null,
+				lastBanSrcIp: null,
+				...over
+			}
+		};
+	}
+
+	async function renderCard(over: Record<string, unknown>): Promise<void> {
+		(settingsApi.getAutomation as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+			healthWith(over)
+		);
+		render(Page);
+		await userEvent.click(tab('security'));
+		await waitFor(() => expect(screen.getByTestId('automation-bans')).toBeInTheDocument());
+	}
+
+	beforeEach(() => {
+		resetUnsavedRegistry();
+	});
+
+	it('renders the last-ban line and 24h count when a ban has been issued', async () => {
+		await renderCard({
+			lastPushAt: '2026-11-20T09:14:02Z',
+			totalBansIssued24h: 7,
+			lastBanScenario: 'arenet/waf-rce',
+			lastBanSrcIp: '185.23.40.4'
+		});
+
+		const line = screen.getByTestId('automation-last-ban');
+		expect(line.textContent ?? '').toContain('arenet/waf-rce');
+		expect(line.textContent ?? '').toContain('185.23.40.4');
+
+		// The 24h count is present and the empty state is not.
+		expect(screen.getByTestId('automation-bans').textContent ?? '').toMatch(/7/);
+		expect(screen.queryByTestId('automation-bans-empty')).toBeNull();
+	});
+
+	it('shows the empty state when no ban has been issued yet', async () => {
+		await renderCard({
+			lastPushAt: null,
+			totalBansIssued24h: 0,
+			lastBanScenario: null,
+			lastBanSrcIp: null
+		});
+
+		expect(screen.getByTestId('automation-bans-empty')).toBeInTheDocument();
+		expect(screen.queryByTestId('automation-last-ban')).toBeNull();
+	});
+
+	it('links "View all bans" to the AreNET-pre-filtered CrowdSec page', async () => {
+		await renderCard({
+			lastPushAt: '2026-11-20T09:14:02Z',
+			totalBansIssued24h: 1,
+			lastBanScenario: 'arenet/throttle',
+			lastBanSrcIp: '203.0.113.9'
+		});
+
+		const link = screen.getByTestId('automation-bans-link') as HTMLAnchorElement;
+		expect(link.getAttribute('href')).toBe('/security?tab=crowdsec&origin=arenet');
+	});
+});

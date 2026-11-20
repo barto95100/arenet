@@ -136,6 +136,13 @@
 				"lastPush": "Last successful push: {at}",
 				"never": "never",
 				"error": "Last error: {err}"
+			},
+			"bans": {
+				"title": "Recent bans",
+				"last": "Last ban: {scenario} from {ip} at {at}",
+				"count24h": "Bans issued in the last 24h: {n}",
+				"viewAll": "View all bans",
+				"empty": "No ban issued yet. Bans appear here when a rule's threshold is crossed."
 			}
 		},
 		"tabsAria": "Settings categories",

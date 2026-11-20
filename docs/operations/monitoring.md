@@ -59,6 +59,23 @@ push counters, last successful push, and last error. The same block is on
 dashboard can read it without the Prometheus endpoint. `/metrics` remains
 the channel for historical/rate alerting.
 
+**Ban activity (v2.84.0+).** The card also shows the most recent auto-ban
+(`lastBanScenario` from `lastBanSrcIp`, at `lastPushAt`) and a rolling
+**`totalBansIssued24h`** count, with a link to Posture › CrowdSec › Live
+LAPI pre-filtered on the **AreNET** origin. The 24h count is an in-memory
+activity gauge (resets on restart, caps at 2048 inside the window — LAPI
+stays the exact ledger). There is deliberately **no** `bans_issued_total`
+metric: a ban is a successful push, so the 24h rate in Grafana is just
+
+```
+increase(arenet_automation_pushes_total{result="success"}[24h])
+```
+
+The pushed decision now also carries `cn` / `as_number` / `as_name`
+(v2.84.0), so `cscli decisions list` and the UI show Country/AS on arenet
+bans; empty is the soft-fail when the GeoIP/ASN DB is missing or the IP is
+private/LAN.
+
 ### Recommended alert
 
 Fire when the writer is broken, or permanent-drops are climbing:

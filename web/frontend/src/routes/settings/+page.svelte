@@ -1233,6 +1233,44 @@
 						</p>
 					{/if}
 
+					<!-- v2.84.0 (D11) — ban-activity view: last ban + 24h count +
+					     deep-link to the arenet-filtered decisions list. Graceful
+					     empty state when nothing has been banned yet. -->
+					{#if !automationLoading && automationHealth}
+						<section class="mb-6" data-testid="automation-bans">
+							<h3 class="text-base font-medium text-primary mb-2">
+								{tl('settings.automation.bans.title')}
+							</h3>
+							{#if automationHealth.lastBanScenario}
+								<p class="text-sm text-primary" data-testid="automation-last-ban">
+									{tl('settings.automation.bans.last', {
+										scenario: automationHealth.lastBanScenario,
+										ip: automationHealth.lastBanSrcIp ?? '—',
+										at: automationHealth.lastPushAt
+											? new Date(automationHealth.lastPushAt).toLocaleString()
+											: '—'
+									})}
+								</p>
+								<p class="text-sm text-muted mt-1">
+									{tl('settings.automation.bans.count24h', {
+										n: automationHealth.totalBansIssued24h
+									})}
+									<a
+										class="underline ml-2"
+										href="/security?tab=crowdsec&origin=arenet"
+										data-testid="automation-bans-link"
+									>
+										{tl('settings.automation.bans.viewAll')}
+									</a>
+								</p>
+							{:else}
+								<p class="text-sm text-muted" data-testid="automation-bans-empty">
+									{tl('settings.automation.bans.empty')}
+								</p>
+							{/if}
+						</section>
+					{/if}
+
 					<!-- Watcher credentials sub-form -->
 					<section class="mb-6">
 						<h3 class="text-base font-medium text-primary mb-2">Watcher credentials</h3>

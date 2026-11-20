@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strconv"
 	"sync"
 	"time"
@@ -29,9 +30,42 @@ import (
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/automation"
 	"github.com/barto95100/arenet/internal/crowdsec"
+	"github.com/barto95100/arenet/internal/geo"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
 )
+
+// geoSourceEnricher adapts the geo country + ASN lookups to
+// automation.GeoEnricher, so an arenet-pushed LAPI decision carries the same
+// Country/AS columns as an origin=crowdsec one (D12, v2.84.0). Soft-fail by
+// construction: a nil/degraded lookup, an unparseable IP, or a LAN/private
+// srcIP yields empty fields, and the ban still fires.
+type geoSourceEnricher struct {
+	geo *geo.Lookup
+	asn *geo.ASNLookup
+}
+
+func (g geoSourceEnricher) EnrichSource(ip string) (cn, asNumber, asName string) {
+	netIP := net.ParseIP(ip)
+	if netIP == nil {
+		return "", "", ""
+	}
+	if g.geo != nil {
+		loc := g.geo.LookupIP(netIP)
+		// Skip the LAN sentinel (Country=="LAN", Found==false) and any
+		// not-found: a private srcIP has no meaningful country code.
+		if loc.Found && loc.Country != "" && loc.Country != "LAN" {
+			cn = loc.Country
+		}
+	}
+	if g.asn != nil {
+		if a := g.asn.LookupASN(netIP); a.ASN != 0 {
+			asNumber = strconv.FormatUint(uint64(a.ASN), 10)
+			asName = a.Name
+		}
+	}
+	return cn, asNumber, asName
+}
 
 // automationWafReader adapts *observability.Store to the
 // automation.WafEventReader interface. Projects WafEvent rows
@@ -292,6 +326,8 @@ func wireAutomation(
 	auditStore *audit.Store,
 	crowdsecSink *crowdsec.Sink,
 	volume *automation.VolumeTracker,
+	geoLookup *geo.Lookup,
+	asnLookup *geo.ASNLookup,
 	logger *slog.Logger,
 ) error {
 	// Load rules from BoltDB (DefaultRuleSet on fresh install).
@@ -354,8 +390,11 @@ func wireAutomation(
 		Audit:         automationAuditReader{store: auditStore},
 		DedupeChecker: automationDedupeChecker{store: obsStore},
 		AuditEmitter:  automationAuditEmitter{store: auditStore},
-		Rules:         rulesHolder,
-		Logger:        logger,
+		// D12 (v2.84.0): enrich pushed decisions with Country/AS from the
+		// existing geo lookups. nil-safe + soft-fail inside the adapter.
+		GeoEnricher: geoSourceEnricher{geo: geoLookup, asn: asnLookup},
+		Rules:       rulesHolder,
+		Logger:      logger,
 		// WriterProvider wired below via the manager.
 	})
 	if err != nil {

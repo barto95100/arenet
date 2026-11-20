@@ -578,6 +578,193 @@ describe('CrowdSec decisions panel — Live LAPI tab', () => {
 	});
 });
 
+// --- v2.84.0 (D11.b) — AreNET origin filter tab + deep-link ----
+//
+// The ban-activity card in Settings links to
+// /security?tab=crowdsec&origin=arenet. The parent page forwards
+// ?origin= as the `initialOrigin` prop. Two independent behaviours
+// are guarded here:
+//   1. A new "AreNET" origin tab (origin === 'arenet'), positioned
+//      right after "Toutes", counting + filtering arenet-pushed bans.
+//   2. The deep-link ONLY pre-selects when initialOrigin === 'arenet';
+//      any other value (or none) must leave the default untouched
+//      (snapshot tab, "Toutes" origin) — no hijack.
+
+describe('CrowdSec decisions panel — AreNET origin tab (v2.84.0 D11.b)', () => {
+	// Fixture: 1 arenet ban + 1 CAPI + 1 cscli. So the per-origin
+	// counts are all=3, arenet=1, local=1, capi=1, manual=0.
+	function sampleWithArenet(): LAPIDecisionsResponse {
+		const ds = [
+			{
+				id: 10,
+				duration: '1h',
+				origin: 'arenet',
+				scenario: 'arenet/waf-rce',
+				scope: 'ip',
+				type: 'ban',
+				value: '185.23.40.4',
+				expiresAt: new Date(Date.now() + 3600_000).toISOString()
+			},
+			{
+				id: 11,
+				duration: '168h',
+				origin: 'CAPI',
+				scenario: 'crowdsecurity/community-blocklist',
+				scope: 'ip',
+				type: 'ban',
+				value: '1.2.3.4',
+				expiresAt: new Date(Date.now() + 7 * 86400_000).toISOString()
+			},
+			{
+				id: 12,
+				duration: '4h',
+				origin: 'cscli',
+				scenario: 'crowdsecurity/http-cve',
+				scope: 'ip',
+				type: 'ban',
+				value: '2.2.2.2',
+				expiresAt: new Date(Date.now() + 14400_000).toISOString()
+			}
+		];
+		const byOrigin: Record<string, number> = {};
+		for (const d of ds) byOrigin[d.origin] = (byOrigin[d.origin] ?? 0) + 1;
+		return {
+			decisions: ds,
+			meta: { total: ds.length, totalByOrigin: byOrigin, limit: 100, offset: 0 }
+		};
+	}
+
+	async function openLiveTab(): Promise<void> {
+		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
+		render(Page);
+		await waitFor(() => expect(securityMock.fetchDecisions).toHaveBeenCalled());
+		await fireEvent.click(screen.getByTestId('tab-live'));
+	}
+
+	it('renders the AreNET tab with its count, positioned right after Toutes', async () => {
+		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleWithArenet());
+		await openLiveTab();
+
+		await waitFor(() => {
+			expect(screen.getByTestId('live-tab-arenet').textContent ?? '').toMatch(
+				/AreNET\s*\(1\)/
+			);
+		});
+
+		// Position: Toutes → AreNET → Locales, in that DOM order.
+		const all = screen.getByTestId('live-tab-all');
+		const arenet = screen.getByTestId('live-tab-arenet');
+		const local = screen.getByTestId('live-tab-local');
+		expect(all.compareDocumentPosition(arenet) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(arenet.compareDocumentPosition(local) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it('pre-selects the Live tab + AreNET origin on ?origin=arenet', async () => {
+		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
+		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleWithArenet());
+		render(Page, { props: { initialOrigin: 'arenet' } });
+
+		// Deep-link opens the Live tab and starts its polling without
+		// the operator touching anything.
+		await waitFor(() => expect(securityMock.fetchLAPIDecisions).toHaveBeenCalled());
+		expect(screen.getByTestId('tab-live')).toHaveAttribute('aria-selected', 'true');
+		expect(screen.getByTestId('live-tab-arenet')).toHaveAttribute('aria-selected', 'true');
+		expect(screen.getByTestId('live-tab-all')).toHaveAttribute('aria-selected', 'false');
+
+		// Only the arenet row is visible; the CAPI/cscli rows are
+		// filtered out by the pre-selected AreNET tab.
+		await waitFor(() => {
+			expect(screen.getByText('185.23.40.4')).toBeInTheDocument();
+			expect(screen.queryByText('1.2.3.4')).toBeNull();
+			expect(screen.queryByText('2.2.2.2')).toBeNull();
+		});
+	});
+
+	it('filters to arenet rows on AreNET click, with no re-fetch', async () => {
+		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleWithArenet());
+		await openLiveTab();
+
+		await waitFor(() => expect(screen.getByText('185.23.40.4')).toBeInTheDocument());
+		// All three origins visible under the default "Toutes".
+		expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+		expect(screen.getByText('2.2.2.2')).toBeInTheDocument();
+
+		const fetchCountBefore = securityMock.fetchLAPIDecisions.mock.calls.length;
+		await fireEvent.click(screen.getByTestId('live-tab-arenet'));
+
+		await waitFor(() => {
+			expect(screen.getByText('185.23.40.4')).toBeInTheDocument(); // arenet kept
+			expect(screen.queryByText('1.2.3.4')).toBeNull(); // CAPI hidden
+			expect(screen.queryByText('2.2.2.2')).toBeNull(); // cscli hidden
+		});
+		// Client-side filter only — switching tabs must not re-hit LAPI.
+		expect(securityMock.fetchLAPIDecisions.mock.calls.length).toBe(fetchCountBefore);
+	});
+
+	it('shows the filtered-empty state when AreNET has 0 matches but LAPI has data', async () => {
+		// CAPI-only fixture: arenet count is 0, so the AreNET tab
+		// renders (0) and selecting it yields the filtered-empty state,
+		// NOT the LAPI-empty one.
+		securityMock.fetchLAPIDecisions.mockResolvedValue({
+			decisions: [
+				{
+					id: 1,
+					duration: '24h',
+					origin: 'CAPI',
+					scenario: 'x',
+					scope: 'ip',
+					type: 'ban',
+					value: '4.4.4.4',
+					expiresAt: new Date(Date.now() + 86400_000).toISOString()
+				}
+			],
+			meta: { total: 1, totalByOrigin: { CAPI: 1 }, limit: 100, offset: 0 }
+		});
+		await openLiveTab();
+
+		await waitFor(() => {
+			expect(screen.getByTestId('live-tab-arenet').textContent ?? '').toMatch(
+				/AreNET\s*\(0\)/
+			);
+		});
+		await fireEvent.click(screen.getByTestId('live-tab-arenet'));
+
+		await waitFor(() => {
+			const empty = screen.getByTestId('live-empty');
+			// The filtered-empty message names the total and the "all"
+			// tab — distinct from the LAPI-empty state.
+			expect(empty.textContent ?? '').toMatch(/this category|cette catégorie/);
+			expect(empty.textContent ?? '').toMatch(/1 total|1/);
+		});
+	});
+
+	it('does NOT hijack the default when no ?origin= (or a non-arenet one) is set', async () => {
+		// No initialOrigin prop → default behaviour: snapshot tab, LAPI
+		// not polled on mount.
+		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
+		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleWithArenet());
+		render(Page);
+		await waitFor(() => expect(securityMock.fetchDecisions).toHaveBeenCalled());
+
+		expect(screen.getByTestId('tab-snapshot')).toHaveAttribute('aria-selected', 'true');
+		expect(screen.getByTestId('tab-live')).toHaveAttribute('aria-selected', 'false');
+		// Deep-link not taken → Live tab never auto-opened → no LAPI poll.
+		expect(securityMock.fetchLAPIDecisions).not.toHaveBeenCalled();
+	});
+
+	it('ignores an unrecognised ?origin= value (opens on the default)', async () => {
+		// initialOrigin='capi' is not a recognised deep-link target:
+		// only 'arenet' pre-selects. Everything else opens on default.
+		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
+		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleWithArenet());
+		render(Page, { props: { initialOrigin: 'capi' } });
+		await waitFor(() => expect(securityMock.fetchDecisions).toHaveBeenCalled());
+
+		expect(screen.getByTestId('tab-snapshot')).toHaveAttribute('aria-selected', 'true');
+		expect(securityMock.fetchLAPIDecisions).not.toHaveBeenCalled();
+	});
+});
+
 // --- Scenarios tab (CS.2.C) ---------------------------------
 
 const sampleScenariosOK = {
