@@ -51,12 +51,15 @@ them today. One workstream: "observabilité des bans AreNET".
 
 ### D11 backend (`internal/automation`)
 
-- **`banTimeline`** — a tiny in-memory sliding-window ring of successful-push
-  timestamps on the Engine. Cap **2048** entries (drop-oldest), pruned to 24h on
-  read. ~48 KB worst case; bans are low-volume (the D8 re-emit guard collapses a
-  flood from one vector to one ban). Saturation at 2048 bans/24h just caps the
-  activity gauge — acceptable (LAPI is the ledger). Mutex-guarded; the writer
-  goroutine appends, the HealthSnapshot reads.
+- **`banTimeline`** — a tiny in-memory sliding-window ring on the Engine. Each
+  entry is **a `time.Time` only** (24 B) — NOT `{ts, scenario, srcIP}`; the ring
+  exists solely to count. Cap **2048** entries (drop-oldest), pruned to 24h on
+  read. Worst-case memory ≈ `2048 × 24 B` + slice overhead ≈ **~48–50 KB**. Bans
+  are low-volume (the D8 re-emit guard collapses a flood from one vector to one
+  ban). Mutex-guarded; the writer goroutine appends, the HealthSnapshot reads.
+- **`lastBan{Scenario,SrcIP}`** — **single** values (the most recent ban only),
+  not per-ring-entry, so the string sizes (scenario ~16 B, IPv4/IPv6 srcIP
+  ≤ 45 B) are paid once, not × 2048.
 - **`lastBan{Scenario,SrcIP}`** — recorded together with `lastPushSuccessNano`
   in the push-success path (`recordPushSuccess`), so all three are always the
   same event. Read into HealthSnapshot.
@@ -91,6 +94,18 @@ them today. One workstream: "observabilité des bans AreNET".
   already exist in `main.go` (`geoLookup` ~`main.go:631`). Soft-fail: a degraded
   lookup yields empty strings and the push proceeds.
 - No change to push/retry semantics.
+
+## Known limitations
+
+- **24h counter is in-memory** — resets to 0 on restart and rebuilds as new bans
+  fire over the following 24h. LAPI remains the accounting ledger.
+- **Overflow past the ring cap** — if more than **2048** bans land inside the 24h
+  window (e.g. a broad distributed attack), drop-oldest means
+  `totalBansIssued24h` **under-reports** (caps at 2048). The UI 24h count is an
+  *activity gauge*, approximate beyond 2048; `cscli` / Live LAPI stay exact.
+- **Enrichment is best-effort** — a degraded or missing GeoIP/ASN DB yields empty
+  `cn`/`as_number`/`as_name` (soft-fail); the ban still fires. A private/LAN
+  srcIP (`Found:false` or `Country=="LAN"`) gets no `cn`.
 
 ## Non-goals
 
