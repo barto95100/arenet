@@ -55,6 +55,14 @@
 
 	let activeTab = $state<ParentTab>(parseTabFromURL());
 
+	// v2.84.0 (D11.b) — optional ?origin= deep-link forwarded to the
+	// CrowdSec panel. The settings ban-activity card links to
+	// /security?tab=crowdsec&origin=arenet to pre-select the AreNET
+	// origin filter in the Live view. Read once at init: the panel only
+	// mounts under tab=crowdsec, and an absent ?origin= leaves the panel
+	// on its default (no hijack of the "Toutes" view).
+	const initialOrigin = page.url.searchParams.get('origin') ?? undefined;
+
 	const parentTabDescriptors = $derived<
 		ReadonlyArray<{ id: ParentTab; label: string; testId: string }>
 	>([
@@ -228,7 +236,7 @@
 		</div>
 	{/if}
 {:else if activeTab === 'crowdsec'}
-	<CrowdSecDecisionsPanel />
+	<CrowdSecDecisionsPanel {initialOrigin} />
 {/if}
 
 <style>

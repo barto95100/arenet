@@ -136,6 +136,13 @@
 				"lastPush": "Dernier envoi réussi : {at}",
 				"never": "jamais",
 				"error": "Dernière erreur : {err}"
+			},
+			"bans": {
+				"title": "Bans récents",
+				"last": "Dernier ban : {scenario} depuis {ip} à {at}",
+				"count24h": "Bans émis sur les dernières 24 h : {n}",
+				"viewAll": "Voir tous les bans",
+				"empty": "Aucun ban émis pour l'instant. Les bans apparaîtront ici lorsqu'un seuil de règle est franchi."
 			}
 		},
 		"tabsAria": "Catégories de réglages",

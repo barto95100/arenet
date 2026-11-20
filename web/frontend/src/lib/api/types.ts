@@ -1593,6 +1593,15 @@ export interface AutomationHealth {
 	lastPushAt: string | null;
 	/** Most recent failed-push message, or null (cleared on next success). */
 	lastPushError: string | null;
+	/**
+	 * v2.84.0 — ban-activity view. totalBansIssued24h is an in-memory rolling
+	 * count (resets on restart; LAPI is the ledger; approximate beyond 2048
+	 * bans in the window). lastBanScenario/lastBanSrcIp are the most recent
+	 * ban's context, at the lastPushAt instant; null when none issued yet.
+	 */
+	totalBansIssued24h: number;
+	lastBanScenario: string | null;
+	lastBanSrcIp: string | null;
 }
 
 export interface AutomationCredentialsView {

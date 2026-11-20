@@ -39,7 +39,7 @@ them today. One workstream: "observabilité des bans AreNET".
 | # | Decision | Choice | Rationale |
 |---|----------|--------|-----------|
 | D11.a | 24h count storage | **In-memory sliding ring** (ts of successful pushes), precise window, drop-oldest | Zero schema change; semantically = what the writer issued. Resets on restart (self-heals in 24h; LAPI is the ledger). `decision_event` has no `origin` column and only exact-match scenario filtering, so the persistent route would need a new prefix-count store method + carries 60s bouncer lag — not worth it for an activity gauge. |
-| D11.b | Deep-link | **Query param `?scenario=arenet` on the existing `/security/decisions`** + client-side `scenario.startsWith("arenet/")` filter in `CrowdSecDecisionsPanel` | No new route, no new endpoint. The panel has no URL filter today; add a minimal one. |
+| D11.b | Deep-link | **CORRECTED after grounding, operator-confirmed (2026-11-20).** The panel lives at `/security` (tab=crowdsec), `/security/decisions` is a deliberate 404 guard (deleted CS.3). The live view filters by **origin** (all/local/capi/manual) — there was **no `arenet` bucket**, so arenet bans only showed under "Toutes". So: **add an "AreNET" origin filter tab** (`origin === 'arenet'` + count), positioned **right after "Toutes"** (the operator's own product is the first filter they reach for); the panel pre-selects it (Live sub-tab + arenet origin) **only** when `?origin=arenet` is explicitly present — arriving without it leaves the default (snapshot tab, "Toutes") untouched (**no hijack**). The settings link points to **`/security?tab=crowdsec&origin=arenet`**. Filter by origin, not scenario (live decisions carry origin; the `decision_event` mirror does not). |
 | D11.c | Widget placement | **In the existing Security Automation health panel** (`settings/+page.svelte`) | `LastPushAt` + badge + push counters already live there; keep one place. |
 | D11 naming | `lastBanIssuedAt` | **(c) reuse `LastPushAt`**, relabel "Dernier ban" in the UI; no new API field for the timestamp | In v1.3 the writer only issues `type=ban`, so a successful push *is* a ban issued — `LastPushAt` is that instant. Renaming (a) breaks the badge consumers; a duplicate alias (b) is noise. |
 | D12.a | Geo lookup failure | **Soft-fail** (push proceeds with empty cn/as) | The lookup is already degraded-mode safe (`geoLookup = &geo.Lookup{}` → empty `Location`). Enrichment is a bonus; a ban must never be blocked by a geo-DB problem. |
@@ -71,11 +71,13 @@ them today. One workstream: "observabilité des bans AreNET".
 - **Health panel** (`settings/+page.svelte`, the Security Automation card):
   - Line: *"Dernier ban : `<scenario>` depuis `<srcIP>` à `<LastPushAt>`"*.
   - Line: *"Bans émis sur 24h : N"* + a **"Voir tous les bans"** link to
-    `/security/decisions?scenario=arenet`.
+    `/security?tab=crowdsec&origin=arenet`.
   - Graceful empty state when `N == 0` / no ban yet (no "last ban" line).
-- **Deep-link filter**: `/security/decisions` reads `?scenario=arenet` and
-  `CrowdSecDecisionsPanel` filters client-side to decisions whose scenario
-  `startsWith("arenet/")`. No API change.
+- **Deep-link filter**: `/security` reads `?origin=` and forwards it to
+  `CrowdSecDecisionsPanel` as the `initialOrigin` prop. When it is `arenet`,
+  the panel opens the Live sub-tab with the new **AreNET** origin tab
+  pre-selected; the table filters client-side to `origin === "arenet"`. Any
+  other value (or none) opens the default. No API change.
 - i18n: every new string in FR **and** EN (`lib/i18n/locales/*.json`, parity
   test must pass).
 
@@ -128,9 +130,16 @@ them today. One workstream: "observabilité des bans AreNET".
   assert the JSON carries `cn`/`as_number`/`as_name` (per
   `[[test-the-wire-not-the-struct]]` — the struct test alone missed a camelCase
   mismatch once).
-- **G4 (frontend)** — `CrowdSecDecisionsPanel` with `scenario=arenet` shows only
-  `arenet/*` rows; health panel renders the last-ban line + 24h count, and the
-  empty state when zero.
+- **G4 (frontend)** — `CrowdSecDecisionsPanel`: the AreNET origin tab renders
+  with its count and sits right after "Toutes"; `initialOrigin="arenet"`
+  pre-selects the Live sub-tab + AreNET filter and shows only `origin==="arenet"`
+  rows; clicking AreNET filters client-side with no re-fetch; the filtered-empty
+  state shows when AreNET has 0 matches but LAPI has data; **no hijack** — no (or
+  a non-arenet) `initialOrigin` opens the default snapshot tab and never polls
+  LAPI on mount. Health panel renders the last-ban line + 24h count, and the
+  empty state when zero; the "Voir tous les bans" link points at
+  `/security?tab=crowdsec&origin=arenet`. (Reinjected: count→0, ignore
+  initialArenet, filter→true, wrong href — each fails only its own guard.)
 - **G5 (dogfood)** — on AreNET-test: trigger a ban, confirm the UI shows "Dernier
   ban …" + "Bans émis sur 24h : 1", the deep-link lands pre-filtered, and
   `cscli decisions list` shows the arenet decision **with** Country/AS populated.
