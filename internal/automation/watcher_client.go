@@ -281,9 +281,22 @@ type AlertSource struct {
 	Scope string `json:"scope"`
 	// Value is the IP / CIDR / country code / AS number.
 	Value string `json:"value"`
-	// IP is the bare IP form (LAPI uses it for geo
-	// enrichment). For Scope="Ip" we set IP == Value.
+	// IP is the bare IP form. For Scope="Ip" we set IP == Value.
+	//
+	// v2.84.0 — the previous comment claimed "LAPI uses it for geo
+	// enrichment". That was wrong: LAPI does NOT enrich /v1/alerts on
+	// ingest; the geoip-enrich parser runs in the agent, upstream, and
+	// arenet posts directly and bypasses it. So Country/AS must be filled
+	// here (Cn/AsNumber/AsName below), not left for LAPI.
 	IP string `json:"ip,omitempty"`
+	// Cn / AsNumber / AsName carry the geo enrichment (D12, v2.84.0) so an
+	// arenet decision shows the same Country / AS columns as an
+	// origin=crowdsec one. Mirrors crowdsec models.Source (cn, as_number,
+	// as_name). omitempty: a degraded/missing GeoIP or ASN DB (or a LAN
+	// srcIP) leaves them out and the push is byte-identical to pre-v2.84.0.
+	Cn       string `json:"cn,omitempty"`
+	AsNumber string `json:"as_number,omitempty"`
+	AsName   string `json:"as_name,omitempty"`
 }
 
 // AlertDecision is the decision sub-object inside an alert.

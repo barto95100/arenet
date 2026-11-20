@@ -140,6 +140,20 @@ type WriterProvider interface {
 	Writer() Writer
 }
 
+// GeoEnricher populates the CrowdSec Alert source's geo fields (country + AS)
+// for a pushed decision (D12, v2.84.0). LAPI does NOT enrich /v1/alerts on
+// ingest — that is an agent-parser concern arenet bypasses — so arenet must
+// fill cn/as_number/as_name itself for its decisions to carry Country/AS like
+// origin=crowdsec ones. Optional + soft-fail: a nil enricher or empty returns
+// leave the fields blank and the ban still fires. Implemented in cmd/arenet
+// over the existing geo country + ASN lookups.
+type GeoEnricher interface {
+	// EnrichSource returns the ISO-3166 alpha-2 country, the AS number (decimal
+	// string) and the AS org name for ip. Any value may be "" (unknown / LAN /
+	// degraded DB).
+	EnrichSource(ip string) (cn, asNumber, asName string)
+}
+
 // EngineConfig holds the trigger engine's wiring. The three
 // Reader interfaces are required (the engine can't tick
 // without them); Writer + AuditEmitter + ActiveDecisionChecker
@@ -168,6 +182,11 @@ type EngineConfig struct {
 
 	AuditEmitter  AuditEmitter
 	DedupeChecker ActiveDecisionChecker
+
+	// GeoEnricher (D12, v2.84.0) populates the pushed decision's cn/as_number/
+	// as_name. Optional, nil-safe, soft-fail. Production wiring passes an
+	// adapter over the geo country + ASN lookups.
+	GeoEnricher GeoEnricher
 
 	Rules  *RuleSetHolder
 	Logger *slog.Logger
@@ -264,6 +283,13 @@ type Engine struct {
 	// CLEARED on the next success, so a non-nil value means "the most
 	// recent completed push failed" — a recent error, not a stale one.
 	lastPushErr atomic.Pointer[string]
+
+	// D11 (v2.84.0) ban-activity view. bans is the 24h sliding-window
+	// timeline for the count; lastBanScenario / lastBanSrcIP are the most
+	// recent ban's context, stamped alongside lastPushSuccessNano.
+	bans            *banTimeline
+	lastBanScenario atomic.Pointer[string]
+	lastBanSrcIP    atomic.Pointer[string]
 }
 
 // NewEngine validates the config + returns an Engine. Does
@@ -291,6 +317,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		dedupe:   newDedupeLRUWithClock(cfg.Now),
 		intents:  make(chan Intent, writerChanBuffer),
 		done:     make(chan struct{}),
+		bans:     newBanTimeline(cfg.Now),
 	}, nil
 }
 
@@ -640,7 +667,7 @@ func (e *Engine) currentWriter() Writer {
 
 func (e *Engine) processIntent(ctx context.Context, writer Writer, intent Intent) {
 	scenario := intent.Source.Scenario()
-	alert := buildAlert(intent, e.cfg.Now())
+	alert := buildAlert(intent, e.cfg.Now(), e.cfg.GeoEnricher)
 
 	backoff := writerBackoffInitial
 	var lastTransientErr error
@@ -648,7 +675,9 @@ func (e *Engine) processIntent(ctx context.Context, writer Writer, intent Intent
 		_, err := writer.PushAlert(ctx, alert)
 		if err == nil {
 			e.totalPushSuccess.Add(1)
-			e.recordPushSuccess(e.cfg.Now())
+			now := e.cfg.Now()
+			e.recordPushSuccess(now)
+			e.recordBan(now, scenario, intent.SrcIP)
 			// Record success in dedupe so the next tick
 			// for the same (src_ip, scenario) within
 			// dedupeTTL skips a duplicate push.
@@ -718,16 +747,23 @@ func (e *Engine) processIntent(ctx context.Context, writer Writer, intent Intent
 // (capacity, leakspeed, scenario_hash, ...) are populated
 // with sensible non-empty defaults so LAPI's validator
 // accepts the alert (see watcher_client.go Alert doc).
-func buildAlert(intent Intent, now time.Time) Alert {
+func buildAlert(intent Intent, now time.Time, geo GeoEnricher) Alert {
 	scenario := intent.Source.Scenario()
 	startAt := now.UTC().Format(time.RFC3339)
+	source := AlertSource{
+		Scope: "Ip",
+		Value: intent.SrcIP,
+		IP:    intent.SrcIP,
+	}
+	// D12 (v2.84.0): populate country + AS so arenet decisions carry the same
+	// Country/AS columns as origin=crowdsec ones. Soft-fail — a nil enricher or
+	// empty returns leave the fields blank (omitempty) and the ban still fires.
+	if geo != nil {
+		source.Cn, source.AsNumber, source.AsName = geo.EnrichSource(intent.SrcIP)
+	}
 	return Alert{
 		Scenario: scenario,
-		Source: AlertSource{
-			Scope: "Ip",
-			Value: intent.SrcIP,
-			IP:    intent.SrcIP,
-		},
+		Source:   source,
 		Decisions: []AlertDecision{{
 			Duration: (time.Duration(intent.DurationSeconds) * time.Second).String(),
 			Origin:   "arenet",
@@ -816,6 +852,38 @@ func (e *Engine) TotalPushDropped() uint64   { return e.totalPushDropped.Load() 
 func (e *Engine) recordPushSuccess(ts time.Time) {
 	e.lastPushSuccessNano.Store(ts.UnixNano())
 	e.lastPushErr.Store(nil)
+}
+
+// recordBan registers a successful ban for the D11 activity view (v2.84.0): it
+// appends the ban timestamp to the 24h sliding-window timeline and stamps the
+// "last ban" scenario + srcIP. Called in the same success path as
+// recordPushSuccess, so LastPushAt / LastBanScenario / LastBanSrcIP always
+// describe the same event.
+func (e *Engine) recordBan(ts time.Time, scenario, srcIP string) {
+	e.bans.observe(ts)
+	s, ip := scenario, srcIP
+	e.lastBanScenario.Store(&s)
+	e.lastBanSrcIP.Store(&ip)
+}
+
+// TotalBansIssued24h returns how many bans the writer pushed in the last 24h
+// (in-memory activity gauge; see banTimeline for the known limitations).
+func (e *Engine) TotalBansIssued24h() int { return e.bans.countSince(banWindow) }
+
+// LastBanScenario / LastBanSrcIP return the scenario / srcIP of the most recent
+// ban, or ("", false) when none has been issued yet.
+func (e *Engine) LastBanScenario() (string, bool) {
+	if p := e.lastBanScenario.Load(); p != nil {
+		return *p, true
+	}
+	return "", false
+}
+
+func (e *Engine) LastBanSrcIP() (string, bool) {
+	if p := e.lastBanSrcIP.Load(); p != nil {
+		return *p, true
+	}
+	return "", false
 }
 
 // recordPushError stores the message of a failed push. Not cleared here;

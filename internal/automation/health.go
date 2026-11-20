@@ -58,6 +58,16 @@ type HealthSnapshot struct {
 	// tombstone.
 	LastPushError *string
 
+	// D11 (v2.84.0) ban-activity view. TotalBansIssued24h is the in-memory
+	// rolling count of bans the writer pushed in the last 24h (resets on
+	// restart; LAPI is the ledger — see banTimeline known limitations).
+	// LastBanScenario / LastBanSrcIP are the most recent ban's context,
+	// stamped at the same instant as LastPushAt (which doubles as
+	// "last ban issued at"); nil when none has been issued yet.
+	TotalBansIssued24h int
+	LastBanScenario    *string
+	LastBanSrcIP       *string
+
 	// Memcounter* are the pre-LRU volume tracker's stats (v2.83.1),
 	// surfaced as arenet_automation_memcounter_* so an operator can see
 	// the tracker's pressure and tune the caps. Keys is the current
@@ -106,6 +116,14 @@ func (m *DefaultManager) HealthSnapshot() HealthSnapshot {
 		snap.MemcounterDroppedCapKey = vs.DroppedCapKey
 		snap.MemcounterDroppedCapGlobal = vs.DroppedCapGlobal
 		snap.MemcounterPrunedWindow = vs.PrunedWindow
+
+		snap.TotalBansIssued24h = m.engine.TotalBansIssued24h()
+		if s, ok := m.engine.LastBanScenario(); ok {
+			snap.LastBanScenario = &s
+		}
+		if ip, ok := m.engine.LastBanSrcIP(); ok {
+			snap.LastBanSrcIP = &ip
+		}
 	}
 	return snap
 }

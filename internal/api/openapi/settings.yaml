@@ -1685,6 +1685,17 @@ components:
           type: string
           nullable: true
           description: Message of the most recent failed push, or null (cleared on the next success).
+        totalBansIssued24h:
+          type: integer
+          description: "v2.84.0 — bans issued in the last 24h (in-memory rolling gauge; resets on restart, LAPI is the ledger; approximate beyond 2048 bans in the window)."
+        lastBanScenario:
+          type: string
+          nullable: true
+          description: "v2.84.0 — scenario of the most recent ban (e.g. arenet/waf-rce), or null if none issued yet."
+        lastBanSrcIp:
+          type: string
+          nullable: true
+          description: "v2.84.0 — source IP of the most recent ban, or null if none issued yet."
     SettingsAutomationRulesEnvelope:
       type: object
       additionalProperties: false
