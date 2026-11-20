@@ -101,10 +101,14 @@ No ordering commitment — each item gets its own brainstorm → spec → plan c
 - Per-route DNS provider selection; DNS-01 propagation settings (resolvers, timeout)
 
 ### Security
-- Security Automation ban visibility in-UI (v2.84.0, deferred D11 from the
-  v2.83.1 pre-LRU volume fix): `lastBanIssuedAt` + `totalBansIssued24h` on the
-  automation health block, and a deep-link to Posture › CrowdSec › Live LAPI
-  filtered on `origin=arenet`. (`LastPushAt` already covers "did a ban fire?".)
+- ~~Security Automation ban visibility in-UI (deferred D11 from the v2.83.1
+  pre-LRU volume fix) + Country/AS enrichment on arenet decisions (D12)~~ →
+  **shipped v2.84.0**: `totalBansIssued24h` + `lastBanScenario`/`lastBanSrcIp`
+  on the automation health block (the ban timestamp reuses `LastPushAt`), a
+  "Dernier ban / Bans émis sur 24h" card, an **AreNET** origin filter tab in
+  Posture › CrowdSec › Live LAPI with a deep-link
+  (`/security?tab=crowdsec&origin=arenet`), and `cn`/`as_number`/`as_name`
+  populated on the pushed decision so `cscli`/UI show Country/AS.
 - Threat export: CSV of malicious IPs, iptables / FortiGate rule generators
 - Outbound security webhooks with HMAC signature + retry
 - Other IP-reputation feeds (e.g. AbuseIPDB)
