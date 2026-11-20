@@ -668,9 +668,29 @@ func (h *ArenetWafHandler) flushTxBuffer(buf *txEventBuffer, interruption *types
 		}
 	}
 
+	// === TEMP DIAG (diag/automation-trigger-trace v3) ===
+	// The actual Action verdict per transaction. interruptionNil is the
+	// discriminator: in block mode a nil interruption downgrades the row to
+	// DETECT+200 (module.go matrix). A 403'd burst request MUST arrive here
+	// with interruptionNil=false; if it shows true, the interruption is not
+	// reaching the flush defer and THAT is the DETECT bug.
+	slog.Default().Info("DIAG flushTxBuffer decision",
+		slog.String("mode", h.Mode),
+		slog.Bool("interruptionNil", interruption == nil),
+		slog.String("action", string(action)),
+		slog.Int("statusCode", statusCode),
+		slog.Int("nEvents", len(buf.events)),
+	)
+	// === /TEMP DIAG ===
 	for i := range buf.events {
 		buf.events[i].Action = action
 		buf.events[i].StatusCode = statusCode
+		slog.Default().Info("DIAG flushTxBuffer event", // TEMP DIAG v3
+			slog.String("ruleID", buf.events[i].RuleID),
+			slog.String("srcIP", buf.events[i].SrcIP),
+			slog.String("action", string(buf.events[i].Action)),
+			slog.String("path", buf.events[i].RequestPath),
+		)
 		sink.Emit(buf.events[i])
 	}
 }
