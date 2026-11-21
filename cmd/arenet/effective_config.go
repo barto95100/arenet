@@ -38,6 +38,7 @@ func effectiveConfigLogAttrs(
 	adminBind, dataDir, httpPort, httpsPort string,
 	updateEnabled bool,
 	updateInterval string,
+	logFormat string,
 	geoipMMDB, geoipASNMMDB string,
 ) []any {
 	updateCheck := "disabled"
@@ -49,6 +50,10 @@ func effectiveConfigLogAttrs(
 		"data_dir", dataDir,
 		"http", httpPort,
 		"https", httpsPort,
+		// #358 — the effective log output format (text|json), so an operator
+		// can confirm ARENET_LOG_FORMAT took effect (it was a phantom knob
+		// before v2.84.4). log_level is on the "Arenet starting" line.
+		"log_format", logFormat,
 		"update_check", updateCheck,
 		"update_interval", updateInterval,
 		"acme_email", setUnset("ARENET_ACME_EMAIL"),

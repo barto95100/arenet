@@ -439,3 +439,56 @@ func TestLogLevel_TOMLFile(t *testing.T) {
 		t.Errorf("LogLevel = %q, want %q from the TOML file", cfg.LogLevel, "error")
 	}
 }
+
+// #358 — ARENET_LOG_FORMAT / --log-format binding, mirroring the LogLevel
+// tests. Before v2.84.4 this var was read nowhere (a phantom knob).
+
+func TestLogFormat_DefaultUnset(t *testing.T) {
+	withEnv(t, nil)
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LogFormat != "" {
+		t.Errorf("LogFormat default = %q, want empty (unset = text)", cfg.LogFormat)
+	}
+}
+
+func TestLogFormat_EnvBinds(t *testing.T) {
+	withEnv(t, map[string]string{"ARENET_LOG_FORMAT": "json"})
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LogFormat != "json" {
+		t.Errorf("LogFormat = %q, want %q — ARENET_LOG_FORMAT must bind "+
+			"(it was read nowhere before v2.84.4)", cfg.LogFormat, "json")
+	}
+}
+
+func TestLogFormat_FlagOverridesEnv(t *testing.T) {
+	withEnv(t, map[string]string{"ARENET_LOG_FORMAT": "json"})
+	cfg, err := Load([]string{"--log-format=text"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LogFormat != "text" {
+		t.Errorf("LogFormat = %q, want %q — the flag layer must win over env", cfg.LogFormat, "text")
+	}
+}
+
+func TestLogFormat_TOMLFile(t *testing.T) {
+	withEnv(t, nil)
+	dir := t.TempDir()
+	path := dir + "/arenet.toml"
+	if err := os.WriteFile(path, []byte("log-format = \"json\"\n"), 0o600); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+	cfg, err := Load([]string{"--config=" + path})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LogFormat != "json" {
+		t.Errorf("LogFormat = %q, want %q from the TOML file", cfg.LogFormat, "json")
+	}
+}

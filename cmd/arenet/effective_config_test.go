@@ -32,10 +32,16 @@ func TestEffectiveConfigLogAttrs_ValuesAndSecrets(t *testing.T) {
 		"/var/lib/arenet", // dataDir
 		":80", ":443",     // http, https
 		true, "12h", // updateEnabled, updateInterval
+		"json", // logFormat
 		"/var/lib/arenet/GeoLite2-City.mmdb (default)", // geoipMMDB
 		"disabled", // geoipASNMMDB
 	)
 	m := attrsToMap(attrs)
+
+	// #358 — the effective log format is logged so an operator can confirm it.
+	if m["log_format"] != "json" {
+		t.Errorf("log_format = %v; want json", m["log_format"])
+	}
 
 	// #356 — the effective MMDB descriptor is logged verbatim (path, not
 	// set/unset); a working default-path DB must not read as "unset".
@@ -129,7 +135,7 @@ func TestEffectiveConfigLogAttrs_UnsetSecretsAndDisabled(t *testing.T) {
 	t.Setenv("ARENET_ACME_EMAIL", "")
 	t.Setenv("ARENET_TRUSTED_PROXIES", "")
 
-	attrs := effectiveConfigLogAttrs("127.0.0.1:8001", "/var/lib/arenet", ":80", ":443", false, "24h", "disabled", "disabled")
+	attrs := effectiveConfigLogAttrs("127.0.0.1:8001", "/var/lib/arenet", ":80", ":443", false, "24h", "text", "disabled", "disabled")
 	m := attrsToMap(attrs)
 
 	if m["update_check"] != "disabled" {
