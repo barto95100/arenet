@@ -234,6 +234,12 @@ func TestSanitizeErrorPageBody_NeutralizesRawRequestReflectors_F42(t *testing.T)
 	}
 	live := []string{
 		"{http.request.uri_escaped}",
+		// v2.84.3 (#365): the URL-escaped PATH form. Caddy resolves it via
+		// url.QueryEscape(req.URL.Path) (replacer.go:179-180), so a '<' from
+		// the client survives as %3C — XSS-safe exactly like uri_escaped. It
+		// is the safe counterpart operators reach for when the raw
+		// {http.request.uri.path} (above, defanged) renders literally.
+		"{http.request.uri.path_escaped}",
 		"{http.request.uuid}",
 		"{http.request.method}",
 		"{http.request.remote.host}",
@@ -260,6 +266,57 @@ func TestSanitizeErrorPageBody_NeutralizesRawRequestReflectors_F42(t *testing.T)
 	// emission must not double-defang or otherwise change it.
 	if again := SanitizeErrorPageBody(got); again != got {
 		t.Errorf("sanitize is not idempotent:\n first = %q\nsecond = %q", got, again)
+	}
+}
+
+// TestSafeRequestPlaceholders_AllowlistIsXSSSafe_F42 pins the EXACT set of
+// {http.request.*} placeholders that neutralizeDangerousPlaceholders lets
+// through unescaped (#365, operator ask #4). It is a tripwire: adding an
+// entry to safeRequestPlaceholders fails this test until the new token is
+// listed here WITH a one-line justification of why it cannot carry a raw '<'
+// from the client into the text/html body. Removing an entry fails it too.
+//
+// The guard exists because the allowlist is the ONLY thing standing between
+// an operator template and reflected XSS (F42). A well-meaning "just let
+// {http.request.host} through so the footer renders" would reopen the vector
+// on the non-host-scoped catch-all page; this test forces that decision to be
+// explicit and reviewed, never a one-line map edit.
+//
+// Every entry below is safe for exactly one of two reasons:
+//   - percent-escaped by Caddy (url.QueryEscape → '<' becomes %3C): the
+//     *_escaped forms;
+//   - structurally cannot contain '<': uuid is Caddy-generated, method is an
+//     RFC 7230 token net/http rejects '<' in, remote.host is a parsed IP.
+func TestSafeRequestPlaceholders_AllowlistIsXSSSafe_F42(t *testing.T) {
+	wantSafe := map[string]string{
+		"{http.request.uri_escaped}":      "url.QueryEscape(RequestURI) — '<' survives as %3C",
+		"{http.request.orig_uri_escaped}": "url.QueryEscape(original URI) — percent-escaped",
+		"{http.request.uri.path_escaped}": "url.QueryEscape(URL.Path) — '<' survives as %3C (v2.84.3 #365)",
+		"{http.request.uuid}":             "Caddy-generated UUID — no attacker bytes",
+		"{http.request.method}":           "RFC 7230 token — net/http rejects '<'",
+		"{http.request.remote.host}":      "parsed socket peer IP — no attacker bytes",
+	}
+
+	// No unexpected entry slipped in (a non-safe placeholder added by mistake).
+	for tok := range safeRequestPlaceholders {
+		if _, ok := wantSafe[tok]; !ok {
+			t.Errorf("safeRequestPlaceholders has UNREVIEWED entry %q — if it is genuinely XSS-safe, add it to wantSafe here with a justification; otherwise it reopens F42 (reflected XSS)", tok)
+		}
+	}
+	// No expected entry silently dropped (would break documented templates).
+	for tok := range wantSafe {
+		if !safeRequestPlaceholders[tok] {
+			t.Errorf("expected safe placeholder %q is missing from safeRequestPlaceholders", tok)
+		}
+	}
+
+	// The allowlist must also only ever gate the {http.request.*} namespace —
+	// the defang treats everything else (env/file + other namespaces) through
+	// separate paths, so a stray non-request token here would be a logic bug.
+	for tok := range safeRequestPlaceholders {
+		if !strings.HasPrefix(tok, "{http.request.") {
+			t.Errorf("safeRequestPlaceholders gates non-request namespace %q — it only governs {http.request.*}", tok)
+		}
 	}
 }
 

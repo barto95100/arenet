@@ -141,4 +141,26 @@ describe('ERROR_PAGE_PLACEHOLDERS', () => {
 		const tokens = ERROR_PAGE_PLACEHOLDERS.map((p) => p.token);
 		expect(tokens).toContain('{http.reverse_proxy.status_code}');
 	});
+
+	it('offers the safe escaped PATH form (#365)', () => {
+		const tokens = ERROR_PAGE_PLACEHOLDERS.map((p) => p.token);
+		expect(tokens).toContain('{http.request.uri.path_escaped}');
+	});
+
+	it('never offers the raw request reflectors defanged by F42', () => {
+		// Mirror of TestSafeRequestPlaceholders_AllowlistIsXSSSafe_F42 on the
+		// Go side: the click-to-insert panel must not hand an operator a token
+		// that renders literally in prod (defanged) — that was the whole of
+		// #365's confusion. host / raw uri / raw path / headers are defanged
+		// server-side, so they have no place in the offered list.
+		const tokens = ERROR_PAGE_PLACEHOLDERS.map((p) => p.token);
+		for (const danger of [
+			'{http.request.host}',
+			'{http.request.uri}',
+			'{http.request.uri.path}',
+			'{http.request.header.User-Agent}'
+		]) {
+			expect(tokens).not.toContain(danger);
+		}
+	});
 });
