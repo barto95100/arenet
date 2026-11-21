@@ -400,8 +400,9 @@
 			// F42: the raw request reflectors are not substituted here;
 			// they are defanged server-side, so the preview shows the
 			// same literal, non-expanding token prod serves. The escaped
-			// whole-URI form stays live.
+			// URI + path forms stay live (v2.84.3 #365).
 			'{http.request.uri_escaped}': '/preview/path',
+			'{http.request.uri.path_escaped}': '/preview/path',
 			'{http.request.uuid}': '00000000-0000-4000-8000-000000000000',
 			'{http.request.remote.host}': '203.0.113.42',
 			'{time.now.year}': String(new Date().getFullYear()),
@@ -1046,6 +1047,9 @@
 				<p class="vars-help">
 					{language.current && t('errorPages.varsHelp')}
 				</p>
+				<p class="vars-help vars-f42">
+					🛡️ {language.current && t('errorPages.varsF42Note')}
+				</p>
 			</details>
 		</div>
 	</div>
@@ -1401,6 +1405,17 @@
 		color: var(--fg-muted);
 		font-size: 12px;
 		font-style: italic;
+	}
+
+	/* v2.84.3 (#365) — F42 defang note; slightly stronger than the
+	   generic help line so operators notice why host/uri.path render
+	   literally. Font-style normal (not italic) to read as guidance. */
+	.vars-f42 {
+		margin-top: 8px;
+		font-style: normal;
+		color: var(--fg-default);
+		border-left: 2px solid var(--accent, #58a6ff);
+		padding-left: 8px;
 	}
 
 	/* v2.18.0 — global maintenance message field (above the editor) */

@@ -86,6 +86,30 @@ shows them current). Attack from a **public** IP (private/LAN gets no `cn`).
 5. Restart Arenet → the 24h count resets to 0 and rebuilds as new bans fire
    (in-memory gauge; LAPI remains the ledger). This is expected, not a bug.
 
+## Reading the Debug observability lines (#361)
+
+With `ARENET_LOG_LEVEL=debug` (honoured since v2.84.2), each tick emits two
+Debug lines whose counters answer different questions. They are easy to
+misread — a burst of 4 requests routinely logs `waf=12` while `in_window=4`.
+That is correct, not a bug:
+
+- **`automation: tick read volume` → `waf` / `throttle` / `audit`** — the RAW
+  volume the tracker retains across the **widest enabled rule window**, summed
+  over **every source IP** and **every WAF category** (SQLi/XSS/RCE/LFI/
+  Protocol/Other), **not deduplicated**, re-read in full each tick. One blocked
+  HTTP request fans out to **one event per matched CRS rule** (a SQLi probe
+  trips the category rule *and* the 949110 anomaly rule), so this number is
+  normally a multiple of the request count. **It is a feed-health gauge** — "are
+  block events arriving at all" — never the threshold input.
+- **`automation: group evaluated` → `in_window` vs `threshold`** — events for
+  **one `(src_ip, source)` group** whose timestamp falls inside **that rule's
+  own window** (which may be narrower than the max window the read spans). **This
+  is the number compared to the threshold** and the one that decides the ban.
+
+So `in_window ≤ waf` always; the gap is events from other IPs, other WAF
+categories, or outside this rule's window. When diagnosing "why did/didn't this
+vector ban", read `in_window`, not the tick-read total.
+
 ## Non-regression (G6)
 
 - A push built **without** an enricher (nil GeoEnricher — e.g. both MMDBs

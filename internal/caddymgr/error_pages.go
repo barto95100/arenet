@@ -53,17 +53,35 @@ import (
 //   {http.reverse_proxy.status_code}    Upstream's literal status
 //                                        (verified reverseproxy.go:1113)
 //
-// Standard request placeholders survive into the error pipeline
-// because WithError uses a shallow copy of *Request with the same
-// Replacer (server.go:778-785) :
+// Standard request placeholders reach the error pipeline because
+// WithError uses a shallow copy of *Request with the same Replacer
+// (server.go:778-785). BUT most of the {http.request.*} namespace
+// reflects raw, attacker-controlled bytes into a text/html body —
+// reflected XSS (F42). neutralizeDangerousPlaceholders below defangs
+// every {http.request.*} token NOT in safeRequestPlaceholders by
+// rewriting its '{' to the HTML entity &#123;, so Caddy's replacer no
+// longer matches it and the token renders as literal text. The
+// trade-off is concrete: an operator who types {http.request.host} or
+// {http.request.uri.path} in a template sees the literal token in the
+// served page, by design — not a rendering bug.
 //
-//   {http.request.method}       GET / POST / etc.
-//   {http.request.host}         Host header (route's primary host)
-//   {http.request.uri}          Full URI including query
-//   {http.request.uri.path}     Path only (no query)
-//   {http.request.uuid}         Per-request Caddy-generated UUID
-//                                (useful for "show this ID when you contact support")
-//   {http.request.remote.host}  Client IP (or proxy's IP if behind LB)
+// Safe (expand at serve time — in safeRequestPlaceholders) :
+//   {http.request.method}            GET / POST / etc. (RFC 7230 token)
+//   {http.request.uri_escaped}       Full URI, url.QueryEscape'd ('<' → %3C)
+//   {http.request.uri.path_escaped}  Path only, url.QueryEscape'd ('<' → %3C)
+//   {http.request.uuid}              Per-request Caddy UUID (forensic ID)
+//   {http.request.remote.host}       Client IP (parsed socket peer)
+//
+// Defanged (render literally — raw reflectors, F42) :
+//   {http.request.host}              Host header — no escaped variant in Caddy
+//   {http.request.uri}               raw URI incl. client query bytes
+//   {http.request.uri.path}          raw decoded path — use path_escaped instead
+//   {http.request.header.*}          any request header (attacker-settable)
+//   {http.request.orig_uri}          raw original URI
+//
+// Operators who need the path should reach for the *_escaped forms. A
+// future Caddy templates-handler wrap (tracked as a backlog issue) could
+// expose host/path safely via contextual escaping.
 //
 // Reference : https://caddyserver.com/docs/json/apps/http/#errors
 //
@@ -228,9 +246,18 @@ var dangerousPlaceholderPrefixes = []string{"{env.", "{file."}
 // visitor sent to /?<svg/onload=…> gets script execution in the site's
 // origin; {http.request.host} and {http.request.header.*} are the same
 // class. Those are defanged.
+//
+// v2.84.3 (#365): {http.request.uri.path_escaped} joins the list. Caddy
+// resolves it with url.QueryEscape(req.URL.Path) (replacer.go:179-180), so a
+// '<' in the client's path survives into the body as %3C — the same escaping
+// guarantee that makes {http.request.uri_escaped} safe. It is the sanctioned
+// way to show the request PATH; the raw {http.request.uri.path} stays defanged.
+// Any addition here is pinned by TestSafeRequestPlaceholders_AllowlistIsXSSSafe_F42,
+// which fails until the new token is justified as XSS-safe.
 var safeRequestPlaceholders = map[string]bool{
 	"{http.request.uri_escaped}":      true,
 	"{http.request.orig_uri_escaped}": true,
+	"{http.request.uri.path_escaped}": true,
 	"{http.request.uuid}":             true,
 	"{http.request.method}":           true,
 	"{http.request.remote.host}":      true,

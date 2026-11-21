@@ -164,13 +164,20 @@ export const ERROR_PAGE_PLACEHOLDERS: PlaceholderDef[] = [
 	// F42: {http.request.uri}, {http.request.host} and
 	// {http.request.uri.path} reflect raw, attacker-controlled bytes into
 	// the text/html page and are defanged server-side
-	// (SanitizeErrorPageBody), so they are no longer offered. The
-	// URL-escaped whole-URI form is safe (a '<' from the client survives
-	// as %3C) and covers the "show the requested URL" use case.
+	// (SanitizeErrorPageBody), so they are deliberately NOT offered here.
+	// The URL-escaped forms are safe (a '<' from the client survives as
+	// %3C) and cover the "show the requested URL / path" use case:
+	// {http.request.uri_escaped} (whole URI) and
+	// {http.request.uri.path_escaped} (path only, v2.84.3 #365).
 	{
 		token: '{http.request.uri_escaped}',
 		label: 'Full request URI, URL-escaped (safe)',
 		example: '/items%3Fid%3D42'
+	},
+	{
+		token: '{http.request.uri.path_escaped}',
+		label: 'Request path, URL-escaped (safe — use instead of raw path)',
+		example: '/items'
 	},
 	{
 		token: '{http.request.uuid}',

@@ -435,6 +435,21 @@ func (e *Engine) tick(ctx context.Context) {
 	// present but suppressed" (the cooldown / already-active Debug lines below).
 	// The v2.84.0 dogfood had no way to tell these apart because the success
 	// path was silent. Debug-level, so production INFO stays quiet.
+	//
+	// #361 — what these counters COUNT (and why waf here is usually larger than
+	// the in_window count in "group evaluated" below):
+	//   - waf = len(wafEvents) is the RAW volume the tracker retains across the
+	//     WIDEST enabled WAF rule window (readWaf queries maxEnabledWindow), summed
+	//     over EVERY source IP and EVERY WAF category (SQLi/XSS/RCE/LFI/Protocol/
+	//     Other), NOT deduplicated, and re-read in full each tick.
+	//   - One blocked HTTP request fans out to one event PER MATCHED CRS RULE
+	//     (internal/waf/module.go buffers one Event per types.MatchedRule, e.g. a
+	//     SQLi probe trips the category rule + the 949110 anomaly rule), so N is
+	//     legitimately a multiple of the request count. A burst of 4 requests that
+	//     each match 3 rules reads as waf=12.
+	// This line is a FEED-HEALTH gauge ("are block events arriving at all"), NOT
+	// the threshold input. The threshold is evaluated per (src_ip, source) group
+	// on the in_window count logged next — see "group evaluated".
 	e.cfg.Logger.Debug("automation: tick read volume",
 		"waf", len(wafEvents), "throttle", len(throttleEvents), "audit", len(auditEvents))
 
@@ -480,6 +495,14 @@ func (e *Engine) tick(ctx context.Context) {
 		// (src_ip, source) inside the rule window, against the threshold.
 		// Debug-level; this is the line a dogfood greps to confirm a burst
 		// reached the threshold before the cooldown/dedupe gates.
+		//
+		// #361 — in_window is the number that ACTUALLY decides the ban: events
+		// for THIS one (src_ip, source) group whose Ts falls inside THIS rule's
+		// own Window (rule.Window, which may be narrower than the max window the
+		// tick-read line spans). It is therefore ≤ the waf/throttle total above,
+		// and the gap is the events belonging to other IPs, other WAF categories,
+		// or outside this rule's window. Compare in_window (not the tick-read
+		// total) to threshold when diagnosing why a vector did or didn't ban.
 		e.cfg.Logger.Debug("automation: group evaluated",
 			"src_ip", k.SrcIP, "source", k.Source,
 			"in_window", recentCount, "threshold", rule.Threshold)

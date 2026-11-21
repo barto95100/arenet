@@ -454,14 +454,15 @@ func previewSubstitute(body string, code int) string {
 		504: "Gateway Timeout",
 	}[code]
 	replacements := map[string]string{
-		"{http.error.status_code}":   strconv.Itoa(code),
-		"{http.error.status_text}":   statusText,
-		"{http.error.id}":            "preview-error-id-0000",
-		"{http.error.message}":       statusText,
-		"{http.request.method}":      "GET",
-		"{http.request.uri_escaped}": "/preview/path",
-		"{http.request.uuid}":        "00000000-0000-4000-8000-000000000000",
-		"{http.request.remote.host}": "203.0.113.42",
+		"{http.error.status_code}":        strconv.Itoa(code),
+		"{http.error.status_text}":        statusText,
+		"{http.error.id}":                 "preview-error-id-0000",
+		"{http.error.message}":            statusText,
+		"{http.request.method}":           "GET",
+		"{http.request.uri_escaped}":      "/preview/path",
+		"{http.request.uri.path_escaped}": "/preview/path",
+		"{http.request.uuid}":             "00000000-0000-4000-8000-000000000000",
+		"{http.request.remote.host}":      "203.0.113.42",
 	}
 	// F42: the raw request reflectors ({http.request.uri},
 	// {http.request.host}, {http.request.uri.path}, ...) are no longer
