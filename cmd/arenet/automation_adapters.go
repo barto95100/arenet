@@ -201,12 +201,12 @@ type automationDedupeChecker struct {
 	store *observability.Store
 }
 
-func (a automationDedupeChecker) HasActiveDecision(ctx context.Context, scope, value, scenario string) (bool, error) {
+func (a automationDedupeChecker) HasActiveDecision(ctx context.Context, scope, value, scenario string) (bool, time.Time, error) {
 	if a.store == nil {
 		// Degraded-mode: no mirror to read → assume not
 		// active. The push goes through; LAPI itself stacks
 		// duplicates harmlessly.
-		return false, nil
+		return false, time.Time{}, nil
 	}
 	now := time.Now().UTC()
 	rows, err := a.store.QueryDecisionEvents(ctx, observability.DecisionEventFilter{
@@ -217,14 +217,16 @@ func (a automationDedupeChecker) HasActiveDecision(ctx context.Context, scope, v
 		Limit:      1,
 	})
 	if err != nil {
-		return false, err
+		return false, time.Time{}, err
 	}
 	for _, r := range rows {
 		if r.ExpiresAt.After(now) {
-			return true, nil
+			// #355 — return the expiry so the trigger can log WHEN the
+			// mirror decision clears (the desynced-mirror dogfood signal).
+			return true, r.ExpiresAt, nil
 		}
 	}
-	return false, nil
+	return false, time.Time{}, nil
 }
 
 // automationAuditEmitter adapts *audit.Store to the

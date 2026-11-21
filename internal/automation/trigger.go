@@ -31,6 +31,14 @@ import (
 // end-to-end.
 const tickInterval = 5 * time.Second
 
+// activeSkipSampleWindow caps how often the "already active in LAPI mirror"
+// skip is logged at INFO, per (src_ip, scenario) (#355). 5 min sits well above
+// the ~60s mirror resync and the known 5-7 min delete-propagation gotcha, so a
+// genuinely stuck/desynced mirror still produces a steady ~1-per-5-min
+// heartbeat per vector — enough to diagnose "bans silently suppressed" without
+// flooding INFO with one line per 5s tick.
+const activeSkipSampleWindow = 5 * time.Minute
+
 // writerChanBuffer is the buffered-channel cap for the
 // trigger → writer pipeline per spec D7.A. Drop-on-full when
 // the writer can't keep up (LAPI down + backlog accumulating);
@@ -106,11 +114,16 @@ type Writer interface {
 // state changes, so it's the right source-of-truth proxy
 // without adding an extra LAPI GET round-trip.
 //
-// Returning (true, nil) tells the writer to skip the push.
-// Returning (false, nil) means "go ahead". Returning an error
+// Returning (true, …, nil) tells the writer to skip the push.
+// Returning (false, …, nil) means "go ahead". Returning an error
 // is treated as "go ahead with the push" — defensive: a
 // dedupe failure shouldn't BLOCK an auto-ban, only suppress
 // duplicates.
+//
+// The second return is the active mirror row's expiry (#355): it lets the
+// trigger log WHEN the duplicate-suppressing decision will clear, which is the
+// exact fact the 2026-11-21 dogfood lacked when a desynced mirror silently
+// swallowed bans. It is the zero time when active is false.
 //
 // Note: the spec §1.3 D4 rationale named "pre-push GET" as
 // the design; reading the local mirror is the implementation
@@ -118,7 +131,7 @@ type Writer interface {
 // purpose). Same source-of-truth semantics, zero extra LAPI
 // round-trips.
 type ActiveDecisionChecker interface {
-	HasActiveDecision(ctx context.Context, scope, value, scenario string) (bool, error)
+	HasActiveDecision(ctx context.Context, scope, value, scenario string) (active bool, expiresAt time.Time, err error)
 }
 
 // WriterProvider is the recreate-and-swap accessor for the
@@ -290,6 +303,11 @@ type Engine struct {
 	bans            *banTimeline
 	lastBanScenario atomic.Pointer[string]
 	lastBanSrcIP    atomic.Pointer[string]
+
+	// activeSkipLastLog samples the "already active in LAPI mirror" skip
+	// INFO log (#355): last emit time per (src_ip, scenario) key. Touched
+	// only from the single-goroutine tick loop, so no lock is needed.
+	activeSkipLastLog map[string]time.Time
 }
 
 // NewEngine validates the config + returns an Engine. Does
@@ -311,13 +329,14 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		cfg.TickInterval = tickInterval
 	}
 	return &Engine{
-		cfg:      cfg,
-		cursor:   make(map[Source]time.Time),
-		cooldown: newCooldownLRUWithClock(cfg.Now),
-		dedupe:   newDedupeLRUWithClock(cfg.Now),
-		intents:  make(chan Intent, writerChanBuffer),
-		done:     make(chan struct{}),
-		bans:     newBanTimeline(cfg.Now),
+		cfg:               cfg,
+		cursor:            make(map[Source]time.Time),
+		cooldown:          newCooldownLRUWithClock(cfg.Now),
+		dedupe:            newDedupeLRUWithClock(cfg.Now),
+		intents:           make(chan Intent, writerChanBuffer),
+		done:              make(chan struct{}),
+		bans:              newBanTimeline(cfg.Now),
+		activeSkipLastLog: make(map[string]time.Time),
 	}, nil
 }
 
@@ -522,8 +541,11 @@ func (e *Engine) tick(ctx context.Context) {
 
 		// Dedupe check (D4.B).
 		active, hit := e.dedupe.Lookup("Ip", k.SrcIP, scenario)
+		// mirrorExpiry is known only on a fresh mirror read (cache miss); it
+		// stays zero on a dedupe-cache hit and is then omitted from the log.
+		var mirrorExpiry time.Time
 		if !hit && e.cfg.DedupeChecker != nil {
-			a, err := e.cfg.DedupeChecker.HasActiveDecision(ctx, "Ip", k.SrcIP, scenario)
+			a, exp, err := e.cfg.DedupeChecker.HasActiveDecision(ctx, "Ip", k.SrcIP, scenario)
 			if err != nil {
 				e.cfg.Logger.Warn("automation: dedupe check failed, proceeding with push",
 					"err", err, "src_ip", k.SrcIP, "scenario", scenario)
@@ -531,11 +553,15 @@ func (e *Engine) tick(ctx context.Context) {
 			} else {
 				e.dedupe.Record("Ip", k.SrcIP, scenario, a)
 				active = a
+				mirrorExpiry = exp
 			}
 		}
 		if active {
-			e.cfg.Logger.Debug("automation: skipping intent (already active in LAPI)",
-				"src_ip", k.SrcIP, "scenario", scenario)
+			// #355 — INFO (sampled), not Debug: a desynced mirror silently
+			// suppressing bans must be visible without debug logging. The
+			// dogfood on 2026-11-21 could not tell "suppressed" from "chain
+			// broken" because this line was Debug.
+			e.logActiveSkipSampled(k.SrcIP, scenario, mirrorExpiry)
 			continue
 		}
 
@@ -563,6 +589,30 @@ func (e *Engine) tick(ctx context.Context) {
 			e.totalIntentsDrop.Add(1)
 		}
 	}
+}
+
+// logActiveSkipSampled emits the "intent dropped — decision already active in
+// LAPI mirror" line at INFO, but at most once per (src_ip, scenario) per
+// activeSkipSampleWindow (#355). Sampling keeps a stuck mirror from flooding
+// INFO with one line per 5s tick while still surfacing the condition — the
+// first skip of each cluster always logs, then at most one per window.
+//
+// mirrorExpiry is the active mirror row's expiry when the decision came from a
+// fresh mirror read; it is the zero time on a dedupe-cache hit and is then
+// omitted. Called only from the single-goroutine tick loop (no lock).
+func (e *Engine) logActiveSkipSampled(srcIP, scenario string, mirrorExpiry time.Time) {
+	key := srcIP + "\x00" + scenario
+	now := e.cfg.Now()
+	if last, ok := e.activeSkipLastLog[key]; ok && now.Sub(last) < activeSkipSampleWindow {
+		return
+	}
+	e.activeSkipLastLog[key] = now
+
+	attrs := []any{"src_ip", srcIP, "scenario", scenario}
+	if !mirrorExpiry.IsZero() {
+		attrs = append(attrs, "mirror_expires_at", mirrorExpiry.UTC().Format(time.RFC3339))
+	}
+	e.cfg.Logger.Info("automation: intent dropped — decision already active in LAPI mirror", attrs...)
 }
 
 // maxEnabledWindow returns the largest Window among enabled rules whose Source
