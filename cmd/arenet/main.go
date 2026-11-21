@@ -172,11 +172,49 @@ var version = "DEV"
 // and the resulting *appconfig.Config carries the same fields
 // (now exported / PascalCase) consumed by run() below.
 
-func newLogger(dev bool) *slog.Logger {
-	level := slog.LevelInfo
-	if dev {
-		level = slog.LevelDebug
+// resolveLogLevel maps the configured level name to an slog.Level.
+// The name is case- and space-insensitive. An empty name means
+// "unset": it resolves to Debug under dev and Info otherwise (the
+// pre-v2.84.2 behaviour). An unrecognised name resolves to that same
+// default and reports recognised=false so the caller can warn — before
+// v2.84.2 the level was hard-wired to dev, so ARENET_LOG_LEVEL was a
+// no-op and a debug burst produced no Debug lines.
+func resolveLogLevel(dev bool, name string) (level slog.Level, recognised bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "debug":
+		return slog.LevelDebug, true
+	case "info":
+		return slog.LevelInfo, true
+	case "warn", "warning":
+		return slog.LevelWarn, true
+	case "error":
+		return slog.LevelError, true
+	case "":
+		return defaultLogLevel(dev), true
+	default:
+		return defaultLogLevel(dev), false
 	}
+}
+
+// defaultLogLevel is the level used when no log level is configured:
+// Debug under dev, Info in production.
+func defaultLogLevel(dev bool) slog.Level {
+	if dev {
+		return slog.LevelDebug
+	}
+	return slog.LevelInfo
+}
+
+// logLevelName is the lowercase name of the effective level, for the
+// boot "effective config" line so an operator can see which level is
+// actually in force (e.g. log_level=debug).
+func logLevelName(dev bool, name string) string {
+	level, _ := resolveLogLevel(dev, name)
+	return strings.ToLower(level.String())
+}
+
+func newLogger(dev bool, logLevel string) *slog.Logger {
+	level, _ := resolveLogLevel(dev, logLevel)
 	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
 	return slog.New(handler)
 }
@@ -264,6 +302,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		"admin_port", cfg.AdminPort,
 		"data_dir", cfg.DataDir,
 		"dev", cfg.Dev,
+		"log_level", logLevelName(cfg.Dev, cfg.LogLevel),
 	)
 
 	// Create the data dir owner-only (0o700): it holds arenet.db with
@@ -2534,8 +2573,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "arenet: config load failed:", err)
 		os.Exit(2)
 	}
-	logger := newLogger(cfg.Dev)
+	logger := newLogger(cfg.Dev, cfg.LogLevel)
 	slog.SetDefault(logger)
+	if _, recognised := resolveLogLevel(cfg.Dev, cfg.LogLevel); !recognised {
+		logger.Warn("unrecognised log level; using fallback",
+			"requested", cfg.LogLevel,
+			"effective", logLevelName(cfg.Dev, cfg.LogLevel),
+		)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

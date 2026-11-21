@@ -74,6 +74,28 @@ defaults; you'll typically touch 2–3 on a real install.
   scorecard counts dev-mode-disabled as a baseline check.
 - **Source**: `internal/config/config.go:269`.
 
+### `ARENET_LOG_LEVEL`
+
+- **Purpose**: sets the log verbosity of the slog handler. Use
+  `debug` to see the fine-grained lines (e.g. Security Automation's
+  per-tick `tick read volume` and `group evaluated`) that INFO
+  hides; `warn` / `error` to quieten a noisy host.
+- **Default**: unset, which resolves to `debug` when `ARENET_DEV=true`
+  and `info` otherwise. The level actually in force is printed on the
+  boot "Arenet starting" line as `log_level=…`.
+- **Format**: one of `debug`, `info`, `warn`, `error`
+  (case-insensitive). An unrecognised value falls back to the default
+  and logs a one-line warning at boot.
+- **Example**: `ARENET_LOG_LEVEL=debug`
+- **Notes**: added in **v2.84.2**. Before it, Debug output was
+  reachable only through `ARENET_DEV`, so this variable did nothing —
+  a debug burst produced no Debug lines. The `--log-level` flag
+  overrides this env var (precedence flag > env > file > default); an
+  explicit level also overrides the implicit `debug` of dev mode.
+- **Source**: `internal/config/config.go:362` (env),
+  `internal/config/config.go:284` (flag), `cmd/arenet/main.go`
+  (`resolveLogLevel`).
+
 ### `ARENET_DATA_DIR`
 
 - **Purpose**: filesystem path where Arenet stores its
