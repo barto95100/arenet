@@ -421,10 +421,22 @@ func (e *Engine) tick(ctx context.Context) {
 	// One read pass per source-type (WAF, throttle, audit).
 	// Each pass returns []SourceEvent already projected to
 	// the engine's normalised shape.
-	var events []SourceEvent
-	events = append(events, e.readWaf(ctx, now)...)
-	events = append(events, e.readThrottle(ctx, now)...)
-	events = append(events, e.readAudit(ctx, now)...)
+	wafEvents := e.readWaf(ctx, now)
+	throttleEvents := e.readThrottle(ctx, now)
+	auditEvents := e.readAudit(ctx, now)
+	events := make([]SourceEvent, 0, len(wafEvents)+len(throttleEvents)+len(auditEvents))
+	events = append(events, wafEvents...)
+	events = append(events, throttleEvents...)
+	events = append(events, auditEvents...)
+
+	// Observability (v2.84.1): the volume the trigger SEES this tick, per
+	// source. At Debug this is the single line that distinguishes "the feed is
+	// empty" (tracker not fed — a forwarder/WAF-category problem) from "events
+	// present but suppressed" (the cooldown / already-active Debug lines below).
+	// The v2.84.0 dogfood had no way to tell these apart because the success
+	// path was silent. Debug-level, so production INFO stays quiet.
+	e.cfg.Logger.Debug("automation: tick read volume",
+		"waf", len(wafEvents), "throttle", len(throttleEvents), "audit", len(auditEvents))
 
 	if len(events) == 0 {
 		return
@@ -464,6 +476,14 @@ func (e *Engine) tick(ctx context.Context) {
 				}
 			}
 		}
+		// Observability (v2.84.1): what the trigger counted for this
+		// (src_ip, source) inside the rule window, against the threshold.
+		// Debug-level; this is the line a dogfood greps to confirm a burst
+		// reached the threshold before the cooldown/dedupe gates.
+		e.cfg.Logger.Debug("automation: group evaluated",
+			"src_ip", k.SrcIP, "source", k.Source,
+			"in_window", recentCount, "threshold", rule.Threshold)
+
 		if recentCount < rule.Threshold {
 			continue
 		}
@@ -678,6 +698,15 @@ func (e *Engine) processIntent(ctx context.Context, writer Writer, intent Intent
 			now := e.cfg.Now()
 			e.recordPushSuccess(now)
 			e.recordBan(now, scenario, intent.SrcIP)
+			// Observability (v2.84.1): a ban is a significant, rare action —
+			// log it at INFO so the operator sees "I banned X" without a
+			// scraper or debug level. Its absence during the v2.84.0 dogfood
+			// (success path was silent) is what made "0 bans" indistinguishable
+			// from "chain broken".
+			e.cfg.Logger.Info("automation: ban pushed",
+				"src_ip", intent.SrcIP, "scenario", scenario,
+				"trigger_count", intent.TriggeringEventCount,
+				"duration_s", intent.DurationSeconds)
 			// Record success in dedupe so the next tick
 			// for the same (src_ip, scenario) within
 			// dedupeTTL skips a duplicate push.
