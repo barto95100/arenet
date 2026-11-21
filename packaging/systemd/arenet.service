@@ -49,7 +49,7 @@ EnvironmentFile=-/etc/arenet/arenet.env
 
 # Default arguments. Operators override via the env file:
 #   ARENET_ADMIN_BIND, ARENET_DATA_DIR, ARENET_LOG_LEVEL,
-#   ARENET_ACCESS_LOG_PATH
+#   ARENET_LOG_FORMAT, ARENET_ACCESS_LOG_PATH
 # All map to the binary's flags via D5 precedence.
 ExecStart=/usr/local/bin/arenet --data-dir=/var/lib/arenet
 
@@ -123,9 +123,9 @@ RestartSec=5s
 TimeoutStopSec=15s
 
 # Log routing — journald captures stdout/stderr by default. Arenet
-# logs in slog's text format; set ARENET_LOG_LEVEL=debug in the env
-# file for verbose output. (Structured JSON output is not yet
-# supported — see the backlog issue.)
+# logs in slog's text format by default; set ARENET_LOG_LEVEL=debug in
+# the env file for verbose output, and ARENET_LOG_FORMAT=json for
+# one-JSON-object-per-line structured logs (for a log shipper).
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=arenet

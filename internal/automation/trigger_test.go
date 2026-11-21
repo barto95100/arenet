@@ -17,9 +17,11 @@
 package automation
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -138,11 +140,16 @@ func (f *fakeAuditEmitter) callCount() int {
 
 // fakeDedupeChecker returns a hard-coded ActiveInLAPI value.
 type fakeDedupeChecker struct {
-	active atomic.Bool
+	active  atomic.Bool
+	expires atomic.Int64 // UnixNano of the mirror expiry to report when active; 0 = zero time
 }
 
-func (f *fakeDedupeChecker) HasActiveDecision(_ context.Context, _, _, _ string) (bool, error) {
-	return f.active.Load(), nil
+func (f *fakeDedupeChecker) HasActiveDecision(_ context.Context, _, _, _ string) (bool, time.Time, error) {
+	var exp time.Time
+	if n := f.expires.Load(); n != 0 {
+		exp = time.Unix(0, n).UTC()
+	}
+	return f.active.Load(), exp, nil
 }
 
 // silentLogger discards log output during tests.
@@ -369,6 +376,71 @@ func TestTriggerEngine_DedupeChecker_ActiveInLAPI_Skips(t *testing.T) {
 
 	if writer.alertCount() != 0 {
 		t.Errorf("writer.alertCount = %d, want 0 (LAPI already has decision)", writer.alertCount())
+	}
+}
+
+// TestLogActiveSkipSampled_OncePerWindowPerKey pins #355: the "already active
+// in LAPI mirror" skip logs at INFO at most once per (src_ip, scenario) per
+// activeSkipSampleWindow, but AT LEAST once per cluster — the first skip of a
+// cluster always logs, repeats inside the window are suppressed, and a skip
+// after the window logs again. Distinct keys are independent. The mirror expiry
+// is included when known and omitted when zero.
+func TestLogActiveSkipSampled_OncePerWindowPerKey(t *testing.T) {
+	const msg = "automation: intent dropped — decision already active in LAPI mirror"
+
+	cur := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	e, err := NewEngine(EngineConfig{
+		Waf: &fakeWafReader{}, Throttle: &fakeThrottleReader{}, Audit: &fakeAuditReader{},
+		Rules:  NewRuleSetHolder(RuleSet{}),
+		Logger: logger,
+		Now:    func() time.Time { return cur },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	count := func() int { return strings.Count(buf.String(), msg) }
+
+	exp := cur.Add(6 * time.Hour)
+	// First skip of the cluster → logs. Four repeats inside the window → silent.
+	for i := 0; i < 5; i++ {
+		e.logActiveSkipSampled("1.2.3.4", "arenet/waf-sqli", exp)
+	}
+	if got := count(); got != 1 {
+		t.Fatalf("after a burst in one window: %d log lines, want exactly 1 (at least once, not spammed)", got)
+	}
+	// The known-expiry case must carry mirror_expires_at.
+	if !strings.Contains(buf.String(), "mirror_expires_at="+exp.Format(time.RFC3339)) {
+		t.Errorf("mirror_expires_at not logged when known; buf=%q", buf.String())
+	}
+
+	// A different (src_ip, scenario) is an independent key → logs immediately.
+	e.logActiveSkipSampled("5.6.7.8", "arenet/waf-sqli", exp)
+	if got := count(); got != 2 {
+		t.Fatalf("distinct key should log independently: %d lines, want 2", got)
+	}
+
+	// Still inside the window for the first key → remains suppressed.
+	cur = cur.Add(activeSkipSampleWindow - time.Second)
+	e.logActiveSkipSampled("1.2.3.4", "arenet/waf-sqli", exp)
+	if got := count(); got != 2 {
+		t.Fatalf("still inside window: %d lines, want 2 (no new line)", got)
+	}
+
+	// Past the window → the first key logs again (the heartbeat).
+	cur = cur.Add(2 * time.Second)
+	e.logActiveSkipSampled("1.2.3.4", "arenet/waf-sqli", time.Time{}) // zero expiry this time
+	if got := count(); got != 3 {
+		t.Fatalf("after window elapsed: %d lines, want 3 (heartbeat resumes)", got)
+	}
+	// Zero expiry → the field is omitted. Exactly the two known-expiry calls
+	// (1.2.3.4 and 5.6.7.8, both passed exp) carry it; the zero-expiry
+	// heartbeat line must not, so no empty/garbage timestamp leaks.
+	if n := strings.Count(buf.String(), "mirror_expires_at="); n != 2 {
+		t.Errorf("mirror_expires_at count = %d, want 2 (only the known-expiry calls); buf=%q", n, buf.String())
 	}
 }
 

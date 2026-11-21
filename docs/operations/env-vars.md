@@ -96,6 +96,28 @@ defaults; you'll typically touch 2–3 on a real install.
   `internal/config/config.go:284` (flag), `cmd/arenet/main.go`
   (`resolveLogLevel`).
 
+### `ARENET_LOG_FORMAT`
+
+- **Purpose**: selects the slog handler's output format. `text` is the
+  default human-readable `key=value` stream; `json` emits one JSON
+  object per line, for ingestion by a log shipper (Loki, Vector,
+  Elastic, …).
+- **Default**: unset, which resolves to `text`. The format actually in
+  force is printed on the boot "effective config" line as
+  `log_format=…`.
+- **Format**: one of `text`, `json` (case-insensitive). An unrecognised
+  value falls back to `text` and logs a one-line warning at boot.
+- **Example**: `ARENET_LOG_FORMAT=json`
+- **Notes**: added in **v2.84.4**. Before it, the variable was
+  documented in the systemd unit but read nowhere — a phantom knob, the
+  same class as `ARENET_LOG_LEVEL` before v2.84.2. The `--log-format`
+  flag overrides this env var (precedence flag > env > file > default).
+  It composes with `ARENET_LOG_LEVEL`: the level sets verbosity, the
+  format sets encoding.
+- **Source**: `internal/config/config.go` (env `ARENET_LOG_FORMAT`,
+  flag `--log-format`), `cmd/arenet/main.go` (`resolveLogFormat`,
+  `newLogger`).
+
 ### `ARENET_DATA_DIR`
 
 - **Purpose**: filesystem path where Arenet stores its

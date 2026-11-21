@@ -213,9 +213,39 @@ func logLevelName(dev bool, name string) string {
 	return strings.ToLower(level.String())
 }
 
-func newLogger(dev bool, logLevel string) *slog.Logger {
+// resolveLogFormat maps the configured format name to a canonical
+// value. Case- and space-insensitive. Empty means "unset" → "text"
+// (the pre-v2.84.4 behaviour). An unrecognised name resolves to
+// "text" and reports recognised=false so the caller can warn — before
+// v2.84.4 ARENET_LOG_FORMAT was read nowhere (a phantom knob, like
+// ARENET_LOG_LEVEL before v2.84.2).
+func resolveLogFormat(name string) (format string, recognised bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "text", "":
+		return "text", true
+	case "json":
+		return "json", true
+	default:
+		return "text", false
+	}
+}
+
+// logFormatName is the canonical format name for the boot "effective
+// config" line so an operator can confirm log_format=json took effect.
+func logFormatName(name string) string {
+	format, _ := resolveLogFormat(name)
+	return format
+}
+
+func newLogger(dev bool, logLevel, logFormat string) *slog.Logger {
 	level, _ := resolveLogLevel(dev, logLevel)
-	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	opts := &slog.HandlerOptions{Level: level}
+	var handler slog.Handler
+	if format, _ := resolveLogFormat(logFormat); format == "json" {
+		handler = slog.NewJSONHandler(os.Stderr, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stderr, opts)
+	}
 	return slog.New(handler)
 }
 
@@ -2145,6 +2175,11 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	logger.Info("effective config", effectiveConfigLogAttrs(
 		cfg.AdminPort, cfg.DataDir, mgr.HTTPListen(), mgr.HTTPSListen(),
 		updateEnabled, updateIntervalStr,
+		logFormatName(cfg.LogFormat), // #358
+		// #356 — report the MMDB path actually opened (env or default
+		// fallback), or "disabled" when none loaded, instead of set/unset.
+		geoipMMDBDescriptor(os.Getenv("ARENET_GEOIP_MMDB"), geoMMDBPath, geoErr == nil),
+		geoipMMDBDescriptor(os.Getenv("ARENET_GEOIP_ASN_MMDB"), asnMMDBPath, asnErr == nil),
 	)...)
 
 	select {
@@ -2573,12 +2608,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, "arenet: config load failed:", err)
 		os.Exit(2)
 	}
-	logger := newLogger(cfg.Dev, cfg.LogLevel)
+	logger := newLogger(cfg.Dev, cfg.LogLevel, cfg.LogFormat)
 	slog.SetDefault(logger)
 	if _, recognised := resolveLogLevel(cfg.Dev, cfg.LogLevel); !recognised {
 		logger.Warn("unrecognised log level; using fallback",
 			"requested", cfg.LogLevel,
 			"effective", logLevelName(cfg.Dev, cfg.LogLevel),
+		)
+	}
+	if _, recognised := resolveLogFormat(cfg.LogFormat); !recognised {
+		logger.Warn("unrecognised log format; using fallback",
+			"requested", cfg.LogFormat,
+			"effective", logFormatName(cfg.LogFormat),
 		)
 	}
 
