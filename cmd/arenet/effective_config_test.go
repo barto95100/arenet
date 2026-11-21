@@ -32,8 +32,19 @@ func TestEffectiveConfigLogAttrs_ValuesAndSecrets(t *testing.T) {
 		"/var/lib/arenet", // dataDir
 		":80", ":443",     // http, https
 		true, "12h", // updateEnabled, updateInterval
+		"/var/lib/arenet/GeoLite2-City.mmdb (default)", // geoipMMDB
+		"disabled", // geoipASNMMDB
 	)
 	m := attrsToMap(attrs)
+
+	// #356 — the effective MMDB descriptor is logged verbatim (path, not
+	// set/unset); a working default-path DB must not read as "unset".
+	if m["geoip_mmdb"] != "/var/lib/arenet/GeoLite2-City.mmdb (default)" {
+		t.Errorf("geoip_mmdb = %v; want the effective path", m["geoip_mmdb"])
+	}
+	if m["geoip_asn_mmdb"] != "disabled" {
+		t.Errorf("geoip_asn_mmdb = %v; want disabled", m["geoip_asn_mmdb"])
+	}
 
 	if m["admin_bind"] != "127.0.0.1:8001" {
 		t.Errorf("admin_bind = %v", m["admin_bind"])
@@ -69,6 +80,29 @@ func TestEffectiveConfigLogAttrs_ValuesAndSecrets(t *testing.T) {
 	}
 }
 
+// TestGeoipMMDBDescriptor pins #356: the boot "effective config" line reports
+// the MMDB path actually used — never "unset" when a default-path DB is loaded
+// and working.
+func TestGeoipMMDBDescriptor(t *testing.T) {
+	cases := []struct {
+		name     string
+		envValue string
+		path     string
+		loaded   bool
+		want     string
+	}{
+		{"env set and loaded", "/custom/City.mmdb", "/custom/City.mmdb", true, "/custom/City.mmdb"},
+		{"default fallback loaded", "", "/var/lib/arenet/GeoLite2-City.mmdb", true, "/var/lib/arenet/GeoLite2-City.mmdb (default)"},
+		{"not loaded at all", "", "/var/lib/arenet/GeoLite2-City.mmdb", false, "disabled"},
+		{"env set but not loaded", "/custom/City.mmdb", "/custom/City.mmdb", false, "disabled"},
+	}
+	for _, c := range cases {
+		if got := geoipMMDBDescriptor(c.envValue, c.path, c.loaded); got != c.want {
+			t.Errorf("%s: geoipMMDBDescriptor(%q,%q,%v) = %q; want %q", c.name, c.envValue, c.path, c.loaded, got, c.want)
+		}
+	}
+}
+
 func TestHumanizeDuration(t *testing.T) {
 	cases := map[string]string{
 		"12h0m0s": "12h",
@@ -95,7 +129,7 @@ func TestEffectiveConfigLogAttrs_UnsetSecretsAndDisabled(t *testing.T) {
 	t.Setenv("ARENET_ACME_EMAIL", "")
 	t.Setenv("ARENET_TRUSTED_PROXIES", "")
 
-	attrs := effectiveConfigLogAttrs("127.0.0.1:8001", "/var/lib/arenet", ":80", ":443", false, "24h")
+	attrs := effectiveConfigLogAttrs("127.0.0.1:8001", "/var/lib/arenet", ":80", ":443", false, "24h", "disabled", "disabled")
 	m := attrsToMap(attrs)
 
 	if m["update_check"] != "disabled" {

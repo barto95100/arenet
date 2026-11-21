@@ -2145,6 +2145,10 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	logger.Info("effective config", effectiveConfigLogAttrs(
 		cfg.AdminPort, cfg.DataDir, mgr.HTTPListen(), mgr.HTTPSListen(),
 		updateEnabled, updateIntervalStr,
+		// #356 — report the MMDB path actually opened (env or default
+		// fallback), or "disabled" when none loaded, instead of set/unset.
+		geoipMMDBDescriptor(os.Getenv("ARENET_GEOIP_MMDB"), geoMMDBPath, geoErr == nil),
+		geoipMMDBDescriptor(os.Getenv("ARENET_GEOIP_ASN_MMDB"), asnMMDBPath, asnErr == nil),
 	)...)
 
 	select {
