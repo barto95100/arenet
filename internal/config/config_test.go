@@ -383,3 +383,59 @@ func TestAdminBind_LANOverrideStillWorks(t *testing.T) {
 		t.Errorf("AdminPort = %q, want the env override to win", cfg.AdminPort)
 	}
 }
+
+// --- v2.84.2: log level binding -------------------------------------
+//
+// Before v2.84.2 there was no LogLevel field at all: Debug was reachable
+// only through Dev, so ARENET_LOG_LEVEL=debug set in an operator's
+// systemd EnvironmentFile did nothing and a debug burst produced no
+// Debug lines. These guards pin that the three layers now reach the
+// field and keep the flag > env > file > default precedence.
+
+func TestLogLevel_DefaultUnset(t *testing.T) {
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LogLevel != "" {
+		t.Errorf("LogLevel default = %q, want empty (unset = resolve from Dev)", cfg.LogLevel)
+	}
+}
+
+func TestLogLevel_EnvBinds(t *testing.T) {
+	withEnv(t, map[string]string{"ARENET_LOG_LEVEL": "debug"})
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("LogLevel = %q, want %q — ARENET_LOG_LEVEL must bind "+
+			"(the v2.84.1 no-op knob)", cfg.LogLevel, "debug")
+	}
+}
+
+func TestLogLevel_FlagOverridesEnv(t *testing.T) {
+	withEnv(t, map[string]string{"ARENET_LOG_LEVEL": "debug"})
+	cfg, err := Load([]string{"--log-level=warn"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LogLevel != "warn" {
+		t.Errorf("LogLevel = %q, want %q — the flag layer must win over env", cfg.LogLevel, "warn")
+	}
+}
+
+func TestLogLevel_TOMLFile(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/arenet.toml"
+	if err := os.WriteFile(path, []byte("log-level = \"error\"\n"), 0o600); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+	cfg, err := Load([]string{"--config=" + path})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LogLevel != "error" {
+		t.Errorf("LogLevel = %q, want %q from the TOML file", cfg.LogLevel, "error")
+	}
+}

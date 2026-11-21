@@ -122,8 +122,10 @@ RestartSec=5s
 # stays in the backlog.
 TimeoutStopSec=15s
 
-# Log routing — journald captures stdout/stderr by default. Set
-# ARENET_LOG_FORMAT=json in the env file to get structured logs.
+# Log routing — journald captures stdout/stderr by default. Arenet
+# logs in slog's text format; set ARENET_LOG_LEVEL=debug in the env
+# file for verbose output. (Structured JSON output is not yet
+# supported — see the backlog issue.)
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=arenet

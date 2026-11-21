@@ -89,6 +89,16 @@ type Config struct {
 	// auto-issuance, dev-only landing page. Default false.
 	Dev bool `toml:"dev"`
 
+	// LogLevel sets the slog handler verbosity: "debug", "info",
+	// "warn" or "error" (case-insensitive). Empty = unset, which
+	// resolves to "debug" under Dev and "info" otherwise. An
+	// unrecognised value falls back to that same default with a
+	// boot warning. Added v2.84.2: before it, Debug logging was
+	// reachable only via Dev, so ARENET_LOG_LEVEL=debug was a
+	// no-op knob. Env ARENET_LOG_LEVEL, flag --log-level,
+	// file log-level.
+	LogLevel string `toml:"log-level"`
+
 	// InsertTestRoute inserts a fixture route at boot for
 	// local-only smoke testing. Default false. Has no effect
 	// in production.
@@ -212,6 +222,7 @@ func Load(args []string) (*Config, error) {
 		fDataDir        = flagSet.String("data-dir", "", "directory where Arenet stores its persistent state (arenet.db, metrics.db, audit.db, certmagic/).")
 		fAccessLogPath  = flagSet.String("access-log-path", "", "file the HTTP access log is written to when enabled in settings (default <data-dir>/logs/access.log).")
 		fDev            = flagSet.Bool("dev", false, "enable development mode (verbose logging, no TLS auto-issuance).")
+		fLogLevel       = flagSet.String("log-level", "", "log verbosity: debug, info, warn, error. Empty uses debug under --dev, else info. Overrides ARENET_LOG_LEVEL.")
 		fInsertTest     = flagSet.Bool("insert-test-route", false, "insert a fixture test route at boot (local smoke only).")
 		fExport         = flagSet.String("export", "", "Step K.3: export the configuration to PATH and exit (default redacts secrets).")
 		fRestore        = flagSet.String("restore", "", "Step K.3: restore the configuration from PATH and exit (before Caddy starts).")
@@ -269,6 +280,9 @@ func Load(args []string) (*Config, error) {
 	}
 	if wasSet["dev"] {
 		cfg.Dev = *fDev
+	}
+	if wasSet["log-level"] {
+		cfg.LogLevel = *fLogLevel
 	}
 	if wasSet["insert-test-route"] {
 		cfg.InsertTestRoute = *fInsertTest
@@ -344,6 +358,9 @@ func applyEnv(cfg *Config) {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.Dev = b
 		}
+	}
+	if v, ok := os.LookupEnv("ARENET_LOG_LEVEL"); ok {
+		cfg.LogLevel = v
 	}
 	if v, ok := os.LookupEnv("ARENET_INSERT_TEST_ROUTE"); ok {
 		if b, err := strconv.ParseBool(v); err == nil {
