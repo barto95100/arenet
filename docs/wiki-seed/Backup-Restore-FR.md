@@ -68,10 +68,17 @@ Schéma JSON v1 (`schema_version: "1.0.0"`) :
     "update_check": { ... },
     "geoip_update": { ... },
     "server_position": { ... },
-    "api_tokens": [ ... ]
+    "api_tokens": [ ... ],
+    "allowlists": [ ... ]
   }
 }
 ```
+
+**Les listes d'autorisation AreNET** (`extras.allowlists`, v2.85.0+, #364) sont
+incluses depuis v2.85.0 : un export de config les emporte et un restore les
+recrée dans `security.db`. Elles ne contiennent aucun secret. Un backup
+**antérieur à v2.85.0** n'a pas de clé `allowlists` et restaure vers un ensemble
+de listes vide proprement.
 
 | Domaine | Section | Secrets (masqués par défaut) |
 | ------- | ------- | ---------------------------- |
