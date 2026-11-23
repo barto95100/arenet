@@ -19,6 +19,7 @@ package automation
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -70,6 +71,32 @@ func AllSources() []Source {
 // decisions vs community-blocklist / cscli-added ones.
 func (s Source) Scenario() string {
 	return "arenet/" + string(s)
+}
+
+// Category is the allowlist scope bucket a Source falls into (#364 spec
+// D4). The AreNET allowlist exposes three scope checkboxes; every Source
+// maps to exactly one of them.
+type Category string
+
+const (
+	CategoryBlock    Category = "block"    // waf-*
+	CategoryThrottle Category = "throttle" // throttle-tier*
+	CategoryAudit    Category = "audit"    // auth-*
+)
+
+// Category maps a Source to its allowlist scope category (#364 spec D4):
+// waf-* → block, throttle-* → throttle, auth-* → audit. An unknown source
+// falls back to block (the most restrictive-to-exempt bucket), but every
+// AllSources() value is covered and pinned by TestSourceCategory_Mapping_G.
+func (s Source) Category() Category {
+	switch {
+	case strings.HasPrefix(string(s), "throttle-"):
+		return CategoryThrottle
+	case strings.HasPrefix(string(s), "auth-"):
+		return CategoryAudit
+	default: // waf-* and any future source
+		return CategoryBlock
+	}
 }
 
 // IsKnown reports whether s is one of the AllSources values.

@@ -518,6 +518,15 @@ type Handler struct {
 	// install) AND the operator has not landed on a manual
 	// override yet. Read-only after construction.
 	bootDetectedPosition *geo.ServerPosition
+
+	// allowlists (#364) backs the /security/allowlists CRUD. Nil-tolerant:
+	// a nil store makes every allowlist endpoint answer 503 (security.db
+	// unavailable at boot) rather than crash. Set via SetAllowlistStore.
+	allowlists AllowlistStore
+	// onAllowlistChange (#364) is invoked after a successful allowlist
+	// mutation so the boot wiring can rebuild the trigger's in-memory
+	// resolver snapshot. nil-tolerant.
+	onAllowlistChange func(context.Context)
 }
 
 // AuthEventSubmitter is the seam internal/api/audit_helpers.go
@@ -758,6 +767,15 @@ type geoIPUpdater interface {
 // that don't exercise the updater).
 func (h *Handler) SetGeoIPUpdater(u geoIPUpdater) {
 	h.geoIPUpdater = u
+}
+
+// SetAllowlistStore wires the #364 allowlist store and the resolver-rebuild
+// hook. onChange is called (best-effort) after each successful mutation so
+// the live trigger picks up the new exemptions without a restart. Either
+// argument may be nil in degraded / test paths.
+func (h *Handler) SetAllowlistStore(store AllowlistStore, onChange func(context.Context)) {
+	h.allowlists = store
+	h.onAllowlistChange = onChange
 }
 
 // SetASNLookup (v2.28) attaches the GeoLite2-ASN lookup used by

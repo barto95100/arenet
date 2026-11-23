@@ -27,6 +27,9 @@ import (
 	"sync"
 	"time"
 
+	"net/netip"
+
+	"github.com/barto95100/arenet/internal/allowlist"
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/automation"
 	"github.com/barto95100/arenet/internal/crowdsec"
@@ -34,6 +37,41 @@ import (
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
 )
+
+// automationAllowlistChecker adapts the AreNET-native allowlist resolver
+// (internal/allowlist) to automation.AllowlistChecker. This is the ONLY
+// bridge between the two packages — the automation package itself imports
+// neither allowlist nor crowdsec (guard G_allowlist_no_crowdsec_dep).
+// Nil-safe + fail-closed: a nil resolver or an unparseable src IP exempts
+// nobody.
+type automationAllowlistChecker struct {
+	resolver *allowlist.Resolver
+}
+
+func (a automationAllowlistChecker) IsAllowlisted(srcIP string, cat automation.Category) bool {
+	if a.resolver == nil {
+		return false
+	}
+	ip, err := netip.ParseAddr(srcIP)
+	if err != nil {
+		return false
+	}
+	return a.resolver.Lookup(ip, mapAllowlistCategory(cat))
+}
+
+// mapAllowlistCategory translates the automation scope category to the
+// allowlist package's own (the two enums are defined independently so the
+// packages stay decoupled).
+func mapAllowlistCategory(c automation.Category) allowlist.Category {
+	switch c {
+	case automation.CategoryThrottle:
+		return allowlist.CategoryThrottle
+	case automation.CategoryAudit:
+		return allowlist.CategoryAudit
+	default:
+		return allowlist.CategoryBlock
+	}
+}
 
 // geoSourceEnricher adapts the geo country + ASN lookups to
 // automation.GeoEnricher, so an arenet-pushed LAPI decision carries the same
@@ -330,6 +368,7 @@ func wireAutomation(
 	volume *automation.VolumeTracker,
 	geoLookup *geo.Lookup,
 	asnLookup *geo.ASNLookup,
+	allowlistResolver *allowlist.Resolver,
 	logger *slog.Logger,
 ) error {
 	// Load rules from BoltDB (DefaultRuleSet on fresh install).
@@ -395,8 +434,11 @@ func wireAutomation(
 		// D12 (v2.84.0): enrich pushed decisions with Country/AS from the
 		// existing geo lookups. nil-safe + soft-fail inside the adapter.
 		GeoEnricher: geoSourceEnricher{geo: geoLookup, asn: asnLookup},
-		Rules:       rulesHolder,
-		Logger:      logger,
+		// #364 — AreNET-native allowlist exemption. nil-safe: a nil resolver
+		// (security.db boot failure) exempts nobody (fail-closed).
+		AllowlistChecker: automationAllowlistChecker{resolver: allowlistResolver},
+		Rules:            rulesHolder,
+		Logger:           logger,
 		// WriterProvider wired below via the manager.
 	})
 	if err != nil {

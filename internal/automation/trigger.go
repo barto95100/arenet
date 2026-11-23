@@ -134,6 +134,21 @@ type ActiveDecisionChecker interface {
 	HasActiveDecision(ctx context.Context, scope, value, scenario string) (active bool, expiresAt time.Time, err error)
 }
 
+// AllowlistChecker is the surface the trigger uses to ask "is this
+// src IP exempt from auto-ban for this category?" per the #364 spec.
+// It is satisfied in production by an adapter over the AreNET-native
+// allowlist resolver (internal/allowlist) — deliberately an interface
+// so the automation package takes NO dependency on the allowlist (or
+// crowdsec) packages (guard G_allowlist_no_crowdsec_dep).
+//
+// A nil AllowlistChecker means "no exemptions": the trigger behaves
+// exactly as it did before #364 (non-regression golden). Returning
+// true tells the trigger to skip the intent (and log an INFO line);
+// returning false means "proceed".
+type AllowlistChecker interface {
+	IsAllowlisted(srcIP string, cat Category) bool
+}
+
 // WriterProvider is the recreate-and-swap accessor for the
 // engine's writer (P.3 wiring). At each intent the writer
 // loop calls Writer() to fetch the CURRENT WatcherClient —
@@ -195,6 +210,12 @@ type EngineConfig struct {
 
 	AuditEmitter  AuditEmitter
 	DedupeChecker ActiveDecisionChecker
+
+	// AllowlistChecker (#364) exempts trusted IPs from auto-ban, per
+	// category. Optional, nil-safe: nil → no exemptions (pre-#364
+	// behaviour). Production wiring passes an adapter over the
+	// internal/allowlist resolver.
+	AllowlistChecker AllowlistChecker
 
 	// GeoEnricher (D12, v2.84.0) populates the pushed decision's cn/as_number/
 	// as_name. Optional, nil-safe, soft-fail. Production wiring passes an
@@ -531,6 +552,18 @@ func (e *Engine) tick(ctx context.Context) {
 		}
 
 		scenario := k.Source.Scenario()
+
+		// Allowlist check (#364) — earliest possible skip, before any
+		// cooldown / dedupe / LAPI-mirror machinery. An allowlisted IP is a
+		// pure AreNET decision and deliberately does NOT consult the crowdsec
+		// mirror (guard G_allowlist_no_crowdsec_dep). Nil checker ⇒ no
+		// exemptions ⇒ pre-#364 behaviour (non-regression golden).
+		if e.cfg.AllowlistChecker != nil &&
+			e.cfg.AllowlistChecker.IsAllowlisted(k.SrcIP, k.Source.Category()) {
+			e.cfg.Logger.Info("automation: ban skipped (allowlisted)",
+				"src_ip", k.SrcIP, "scenario", scenario)
+			continue
+		}
 
 		// Cooldown check (D5.A).
 		if e.cooldown.HasCooldown(k.SrcIP, scenario) {
