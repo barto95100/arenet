@@ -343,20 +343,41 @@ func b2i(b bool) int {
 	return 0
 }
 
-// validateEntries normalises and validates each entry's CIDR/IP.
-//
-// STUB (RED): currently accepts every entry verbatim, so the guard
-// TestAllowlistCIDRValidation_G fails first. The real net/netip
-// validation lands with the resolver implementation.
+// validateEntries normalises and validates each entry's CIDR/IP, rejecting
+// the whole payload on the first invalid entry.
 func validateEntries(in []Entry) ([]Entry, error) {
-	return in, nil
+	out := make([]Entry, 0, len(in))
+	for _, e := range in {
+		norm, err := normalizeCIDR(e.CIDR)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Entry{CIDR: norm, Note: strings.TrimSpace(e.Note)})
+	}
+	return out, nil
 }
 
-// normalizeCIDR parses a bare IP or CIDR into canonical prefix form.
-//
-// STUB (RED): returns the input unchanged with no error.
+// normalizeCIDR parses a bare IP or a CIDR into canonical masked-prefix
+// form (a bare IP becomes /32 or /128). It rejects empty, malformed and
+// out-of-range inputs via net/netip.
 func normalizeCIDR(s string) (string, error) {
-	return s, nil
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", fmt.Errorf("allowlist: empty entry")
+	}
+	if strings.Contains(s, "/") {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return "", fmt.Errorf("allowlist: invalid CIDR %q: %w", s, err)
+		}
+		return p.Masked().String(), nil
+	}
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return "", fmt.Errorf("allowlist: invalid IP %q: %w", s, err)
+	}
+	if a.Zone() != "" {
+		return "", fmt.Errorf("allowlist: zoned address %q not allowed", s)
+	}
+	return netip.PrefixFrom(a, a.BitLen()).String(), nil
 }
-
-var _ = netip.Addr{} // keep net/netip imported for the real implementation

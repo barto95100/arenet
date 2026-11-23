@@ -553,6 +553,18 @@ func (e *Engine) tick(ctx context.Context) {
 
 		scenario := k.Source.Scenario()
 
+		// Allowlist check (#364) — earliest possible skip, before any
+		// cooldown / dedupe / LAPI-mirror machinery. An allowlisted IP is a
+		// pure AreNET decision and deliberately does NOT consult the crowdsec
+		// mirror (guard G_allowlist_no_crowdsec_dep). Nil checker ⇒ no
+		// exemptions ⇒ pre-#364 behaviour (non-regression golden).
+		if e.cfg.AllowlistChecker != nil &&
+			e.cfg.AllowlistChecker.IsAllowlisted(k.SrcIP, k.Source.Category()) {
+			e.cfg.Logger.Info("automation: ban skipped (allowlisted)",
+				"src_ip", k.SrcIP, "scenario", scenario)
+			continue
+		}
+
 		// Cooldown check (D5.A).
 		if e.cooldown.HasCooldown(k.SrcIP, scenario) {
 			e.cfg.Logger.Debug("automation: skipping intent (cooldown)",

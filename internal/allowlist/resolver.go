@@ -59,20 +59,59 @@ func NewResolver(store *Store) *Resolver {
 }
 
 // Rebuild reloads the active-allowlist snapshot from the store and swaps
-// it in atomically.
-//
-// STUB (RED): currently a no-op — it does not read the store, so the
-// resolver guards (cidr match, rebuild-on-mutation) fail first.
+// it in atomically. A nil store (#364 spec D-DEGRADED) yields an empty
+// set: fail-closed, exempt nobody.
 func (r *Resolver) Rebuild(ctx context.Context) error {
+	byCat := map[Category][]netip.Prefix{}
+	if r.store == nil {
+		r.set.Store(&resolvedSet{byCat: byCat})
+		return nil
+	}
+	lists, err := r.store.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, a := range lists {
+		if !a.Enabled {
+			continue
+		}
+		var prefixes []netip.Prefix
+		for _, e := range a.Entries {
+			p, err := netip.ParsePrefix(e.CIDR)
+			if err != nil {
+				continue // defensive: entries are normalised on write
+			}
+			prefixes = append(prefixes, p)
+		}
+		if len(prefixes) == 0 {
+			continue
+		}
+		if a.ScopeBlock {
+			byCat[CategoryBlock] = append(byCat[CategoryBlock], prefixes...)
+		}
+		if a.ScopeThrottle {
+			byCat[CategoryThrottle] = append(byCat[CategoryThrottle], prefixes...)
+		}
+		if a.ScopeAudit {
+			byCat[CategoryAudit] = append(byCat[CategoryAudit], prefixes...)
+		}
+	}
+	r.set.Store(&resolvedSet{byCat: byCat})
 	return nil
 }
 
 // Lookup reports whether ip is covered by an active allowlist whose scope
-// includes cat.
-//
-// STUB (RED): always false (the snapshot is never populated by the stub
-// Rebuild).
+// includes cat. Lock-free: reads the current atomic snapshot.
 func (r *Resolver) Lookup(ip netip.Addr, cat Category) bool {
+	set := r.set.Load()
+	if set == nil {
+		return false
+	}
+	for _, p := range set.byCat[cat] {
+		if p.Contains(ip) {
+			return true
+		}
+	}
 	return false
 }
 

@@ -19,6 +19,7 @@ package automation
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -84,12 +85,18 @@ const (
 )
 
 // Category maps a Source to its allowlist scope category (#364 spec D4):
-// waf-* → block, throttle-* → throttle, auth-* → audit.
-//
-// STUB (RED): returns a fixed value so the guard TestSourceCategory_Mapping_G
-// fails first; the real prefix-based mapping lands with the allowlist hook.
+// waf-* → block, throttle-* → throttle, auth-* → audit. An unknown source
+// falls back to block (the most restrictive-to-exempt bucket), but every
+// AllSources() value is covered and pinned by TestSourceCategory_Mapping_G.
 func (s Source) Category() Category {
-	return CategoryBlock
+	switch {
+	case strings.HasPrefix(string(s), "throttle-"):
+		return CategoryThrottle
+	case strings.HasPrefix(string(s), "auth-"):
+		return CategoryAudit
+	default: // waf-* and any future source
+		return CategoryBlock
+	}
 }
 
 // IsKnown reports whether s is one of the AllSources values.
