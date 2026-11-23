@@ -270,6 +270,50 @@ func (s *Store) Delete(ctx context.Context, slug string) error {
 	return nil
 }
 
+// ReplaceAll wipes every allowlist and re-inserts the given ones, preserving
+// each list's slug (unlike Create, which derives a fresh slug). It is the
+// restore path (#372): the whole set is replaced transactionally, so a
+// failure leaves the store untouched. Entries are re-validated; an invalid
+// entry rejects the whole restore (the snapshot should already hold
+// normalised entries, so this is a corruption guard).
+func (s *Store) ReplaceAll(ctx context.Context, lists []Allowlist) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM allowlist`); err != nil {
+		return fmt.Errorf("allowlist: replace wipe: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, a := range lists {
+		norm, err := validateEntries(a.Entries)
+		if err != nil {
+			return err
+		}
+		slug := strings.TrimSpace(a.Slug)
+		if slug == "" {
+			slug = slugify(a.Name)
+		}
+		created := a.CreatedAt.UTC().Format(time.RFC3339)
+		if a.CreatedAt.IsZero() {
+			created = now
+		}
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO allowlist (slug, name, description, enabled, scope_block, scope_throttle, scope_audit, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?)`,
+			slug, a.Name, a.Description, b2i(a.Enabled), b2i(a.ScopeBlock), b2i(a.ScopeThrottle), b2i(a.ScopeAudit), created, now)
+		if err != nil {
+			return fmt.Errorf("allowlist: replace insert %q: %w", slug, err)
+		}
+		id, _ := res.LastInsertId()
+		if err := insertEntries(ctx, tx, id, norm, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // --- helpers -------------------------------------------------------------
 
 type scanner interface {

@@ -149,6 +149,8 @@ type ImportReport struct {
 	AlertChannelsImported int
 	AlertRulesImported    int
 	APITokensImported     int
+	// AllowlistsImported (#372) counts the restored AreNET allowlists.
+	AllowlistsImported int
 	// SentinelsInheritedTotal counts sentinel occurrences resolved
 	// by ID match against the live store.
 	SentinelsInheritedTotal int
