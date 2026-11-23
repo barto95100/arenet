@@ -12,6 +12,7 @@
 ## Security / Sécurité
 - [WAF](WAF) · [WAF 🇫🇷](WAF-FR)
 - [CrowdSec](CrowdSec) · [CrowdSec 🇫🇷](CrowdSec-FR)
+- [Allowlists](Allowlists) · [Allowlists 🇫🇷](Allowlists-FR)
 - [Country Block](Country-Block) · [Country Block 🇫🇷](Country-Block-FR)
 - [Rate Limit](Rate-Limit) · [Rate Limit 🇫🇷](Rate-Limit-FR)
 - [OIDC SSO](OIDC-SSO) · [OIDC SSO 🇫🇷](OIDC-SSO-FR)
