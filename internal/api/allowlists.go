@@ -37,6 +37,10 @@ type AllowlistStore interface {
 	Create(ctx context.Context, in allowlist.Input) (*allowlist.Allowlist, error)
 	Update(ctx context.Context, slug string, in allowlist.Input) (*allowlist.Allowlist, error)
 	Delete(ctx context.Context, slug string) error
+	// ReplaceAll is the backup-restore seam (#372): it lets the backup
+	// handler pass the store as a backup.AllowlistSource (List) and
+	// backup.AllowlistSink (ReplaceAll) without a second reference.
+	ReplaceAll(ctx context.Context, lists []allowlist.Allowlist) error
 }
 
 // allowlistRequest is the create/update wire shape. The scope + enabled

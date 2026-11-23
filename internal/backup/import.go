@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/barto95100/arenet/internal/allowlist"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/google/uuid"
@@ -65,7 +66,7 @@ type ImportStorer interface {
 // bbolt write transaction; a bbolt-level failure rolls the whole
 // thing back. This is the "all-or-nothing" property pinned by spec
 // §5.3.
-func Import(ctx context.Context, store ImportStorer, users UserStorer, snap *Snapshot, opts ImportOptions) (*ImportReport, error) {
+func Import(ctx context.Context, store ImportStorer, users UserStorer, snap *Snapshot, opts ImportOptions, allowlists ...AllowlistSink) (*ImportReport, error) {
 	if snap == nil {
 		return nil, errors.New("import: nil snapshot")
 	}
@@ -153,6 +154,29 @@ func Import(ctx context.Context, store ImportStorer, users UserStorer, snap *Sna
 		report.AlertRulesImported = len(ex.AlertRules)
 		report.APITokensImported = len(ex.APITokens)
 	}
+
+	// #372 — restore the AreNET allowlists into security.db via the
+	// optional sink. This runs AFTER the BoltDB restore committed, so a
+	// BoltDB failure never half-applies allowlists. D-RESTORE: if the
+	// sink fails (e.g. security.db unavailable), the import stops here
+	// and returns a hard error — no silent partial restore, no silent
+	// fallback to an empty allowlist. The BoltDB restore stays committed
+	// (the operator is told the allowlist step failed, non-zero).
+	//
+	// ReplaceAll is a full replacement: a pre-v2.85.0 snapshot carries no
+	// allowlists (nil slice) → the store is wiped clean, which is the
+	// correct back-compat outcome.
+	if sink := firstAllowlistSink(allowlists); sink != nil {
+		var lists []allowlist.Allowlist
+		if resolved.Extras != nil {
+			lists = resolved.Extras.Allowlists
+		}
+		if err := sink.ReplaceAll(ctx, lists); err != nil {
+			return nil, fmt.Errorf("import: restore allowlists: %w", err)
+		}
+		report.AllowlistsImported = len(lists)
+	}
+
 	return report, nil
 }
 

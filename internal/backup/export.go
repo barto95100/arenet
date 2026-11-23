@@ -73,7 +73,7 @@ type UserStorer interface {
 // carried in the snapshot as operational metadata (post-mortem on
 // "which version produced this file"). The caller passes it from
 // cmd/arenet/main.go's version constant.
-func Export(ctx context.Context, store Storer, users UserStorer, arenetVersion string, includeSecrets bool) (*Snapshot, error) {
+func Export(ctx context.Context, store Storer, users UserStorer, arenetVersion string, includeSecrets bool, allowlists ...AllowlistSource) (*Snapshot, error) {
 	if store == nil || users == nil {
 		return nil, errors.New("backup: nil store")
 	}
@@ -133,6 +133,17 @@ func Export(ctx context.Context, store Storer, users UserStorer, arenetVersion s
 	extras, err := exportExtras(ctx, store)
 	if err != nil {
 		return nil, err
+	}
+
+	// #372 — allowlists live in a dedicated store (security.db), not in
+	// the BoltDB Storer, so they are read from the optional source here.
+	// Absent/nil source ⇒ no allowlists section (pre-v2.85.0 behaviour).
+	if src := firstAllowlistSource(allowlists); src != nil {
+		lists, lerr := src.List(ctx)
+		if lerr != nil {
+			return nil, fmt.Errorf("export: list allowlists: %w", lerr)
+		}
+		extras.Allowlists = lists
 	}
 
 	snap := &Snapshot{

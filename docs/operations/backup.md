@@ -12,6 +12,10 @@ Arenet's state lives in three files inside the data directory
   outside the data directory and back it up separately.
 - `metrics.db` — SQLite: observability counters + WAF/throttle
   event history.
+- `security.db` — SQLite (v2.85.0+): the AreNET allowlists (#364).
+  Included in the logical export/import since v2.85.0 — a config
+  export carries the allowlists and a restore recreates them (a
+  pre-v2.85.0 backup simply restores to an empty allowlist set).
 - `audit.db` — (if present) audit-specific overflow store.
 
 Plus the certmagic subdirectory:

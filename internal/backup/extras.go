@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/barto95100/arenet/internal/alerting"
+	"github.com/barto95100/arenet/internal/allowlist"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/automation"
 	"github.com/barto95100/arenet/internal/storage"
@@ -62,6 +63,12 @@ type SnapshotExtras struct {
 	TCPServices []storage.TCPService `json:"tcp_services"`
 	// APITokens are the service-account tokens; token_hash is a secret.
 	APITokens []auth.APIToken `json:"api_tokens"`
+	// Allowlists (#372) are the AreNET-native allowlists from the
+	// dedicated security.db store. No secret: an allowlist is IPs/CIDRs +
+	// notes. omitempty keeps a pre-v2.85.0 backup (no allowlists section)
+	// byte-compatible, and a restore of such a backup leaves security.db
+	// cleanly empty.
+	Allowlists []allowlist.Allowlist `json:"allowlists,omitempty"`
 }
 
 // Entity names of the extras, used in sentinel identities and

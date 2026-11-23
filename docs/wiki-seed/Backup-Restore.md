@@ -68,10 +68,16 @@ JSON schema v1 (`schema_version: "1.0.0"`) :
     "update_check": { ... },
     "geoip_update": { ... },
     "server_position": { ... },
-    "api_tokens": [ ... ]
+    "api_tokens": [ ... ],
+    "allowlists": [ ... ]
   }
 }
 ```
+
+**AreNET allowlists** (`extras.allowlists`, v2.85.0+, #364) are included since
+v2.85.0: a config export carries them and a restore recreates them in
+`security.db`. They hold no secrets. A **pre-v2.85.0** backup has no `allowlists`
+key and restores to a cleanly empty allowlist set.
 
 | Area | Section | Secrets (redacted by default) |
 | ---- | ------- | ----------------------------- |
