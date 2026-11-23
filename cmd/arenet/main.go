@@ -123,6 +123,7 @@ import (
 	"github.com/caddyserver/caddy/v2"
 
 	"github.com/barto95100/arenet/internal/alerting"
+	"github.com/barto95100/arenet/internal/allowlist"
 	"github.com/barto95100/arenet/internal/api"
 	"github.com/barto95100/arenet/internal/api/topology"
 	"github.com/barto95100/arenet/internal/audit"
@@ -803,6 +804,28 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		obsStore = nil
 	} else {
 		logger.Info("observability storage opened", "path", obsPath)
+	}
+
+	// #364 — AreNET-native allowlist store (security.db), a DEDICATED SQLite
+	// file kept separate from the retention-pruned metrics.db so this
+	// operator config is never silently dropped (spec D-STORE). D-DEGRADED:
+	// if the DB can't be opened, build a resolver over a nil store — it
+	// exempts nobody (fail-closed), the automation keeps banning normally,
+	// and we WARN rather than abort the data plane.
+	alPath := filepath.Join(cfg.DataDir, "security.db")
+	alStore, alErr := allowlist.Open(ctx, alPath)
+	if alErr != nil {
+		logger.Warn("allowlist: security DB unavailable — allowlist disabled, automation bans normally (fail-closed)",
+			"path", alPath, "err", alErr,
+		)
+		alStore = nil
+	} else {
+		logger.Info("allowlist storage opened", "path", alPath)
+	}
+	allowlistResolver := allowlist.NewResolver(alStore)
+	if rbErr := allowlistResolver.Rebuild(ctx); rbErr != nil {
+		logger.Warn("allowlist: initial rebuild failed — exempting nobody until next mutation",
+			"err", rbErr)
 	}
 
 	// Step V.1 — the GeoIP City/ASN lookups are now opened and the
@@ -1512,6 +1535,19 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// healthy "/" says nothing about whether the next backup fits.
 	apiHandler.SetSystemInfoReader(sysinfo.New(cfg.DataDir))
 
+	// #364 — wire the AreNET allowlist store + resolver-rebuild hook.
+	// Only wired when the store opened: a typed-nil *allowlist.Store would
+	// make the handler's nil check pass falsely, so leave the handler's
+	// store nil (endpoints answer 503) in the degraded path. The onChange
+	// hook rebuilds the live trigger's resolver snapshot after a mutation.
+	if alStore != nil {
+		apiHandler.SetAllowlistStore(alStore, func(c context.Context) {
+			if err := allowlistResolver.Rebuild(c); err != nil {
+				logger.Warn("allowlist: resolver rebuild after mutation failed", "err", err)
+			}
+		})
+	}
+
 	// Step AL.1.b — wire the alerting Dispatcher. Stateless
 	// fan-out engine that owns the channel.Kind → Sender
 	// dispatch + the per-channel MinSeverity / Enabled
@@ -1784,7 +1820,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// the data plane is unaffected.
 	automationEngineCtx, automationEngineCancel := context.WithCancel(ctx)
 	var automationWG sync.WaitGroup
-	if err := wireAutomation(automationEngineCtx, &automationWG, store, obsStore, auditStore, crowdsecSink, automationVolume, geoLookup, asnLookup, logger); err != nil {
+	if err := wireAutomation(automationEngineCtx, &automationWG, store, obsStore, auditStore, crowdsecSink, automationVolume, geoLookup, asnLookup, allowlistResolver, logger); err != nil {
 		logger.Warn("automation: trigger engine disabled", "err", err)
 	}
 	defer func() {

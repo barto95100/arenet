@@ -1407,6 +1407,133 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '500': { $ref: '#/components/responses/ServerError' }
 
+  /security/allowlists:
+    get:
+      summary: List AreNET allowlists
+      description: |
+        AreNET-native allowlists (#364): trusted IPs/CIDRs exempt from AreNET
+        Security Automation auto-bans, per scope category (block / throttle /
+        audit). Covers ONLY `origin=arenet` decisions — use `cscli allowlist`
+        for CrowdSec-native decisions. `503` when the allowlist store is
+        unavailable.
+      operationId: listAllowlists
+      tags: [Security]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Allowlists.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [allowlists]
+                properties:
+                  allowlists:
+                    type: array
+                    items: { $ref: '#/components/schemas/Allowlist' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Allowlist store unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    post:
+      summary: Create an AreNET allowlist
+      description: |
+        Creates an allowlist. The slug is derived from the name and made
+        unique. Each entry is validated as an IP or CIDR (a bare IP becomes
+        /32 or /128); an invalid entry rejects the whole payload. Scope and
+        enabled flags default to true when omitted.
+      operationId: createAllowlist
+      tags: [Security]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AllowlistInput' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Allowlist' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503':
+          description: Allowlist store unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /security/allowlists/{slug}:
+    parameters:
+      - name: slug
+        in: path
+        required: true
+        description: The allowlist's stable slug.
+        schema: { type: string }
+    get:
+      summary: Get one AreNET allowlist
+      operationId: getAllowlist
+      tags: [Security]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Allowlist.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Allowlist' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503':
+          description: Allowlist store unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    put:
+      summary: Update an AreNET allowlist
+      description: Replaces the allowlist's fields and entries wholesale.
+      operationId: updateAllowlist
+      tags: [Security]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AllowlistInput' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Allowlist' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503':
+          description: Allowlist store unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      summary: Delete an AreNET allowlist
+      operationId: deleteAllowlist
+      tags: [Security]
+      x-arenet-role: admin
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503':
+          description: Allowlist store unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
 components:
   parameters:
     SecRouteFilter:
@@ -1638,3 +1765,40 @@ components:
         message: { type: string }
         ip: { type: string }
         userAgent: { type: string }
+    Allowlist:
+      type: object
+      description: An AreNET allowlist with its scope flags and entries (#364).
+      required: [slug, name, enabled, scopeBlock, scopeThrottle, scopeAudit]
+      properties:
+        slug: { type: string, description: Stable identifier derived from name. }
+        name: { type: string }
+        description: { type: string }
+        enabled: { type: boolean }
+        scopeBlock: { type: boolean, description: Exempt from arenet/waf-* bans. }
+        scopeThrottle: { type: boolean, description: Exempt from arenet/throttle-tier* bans. }
+        scopeAudit: { type: boolean, description: Exempt from arenet/auth-* bans. }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/AllowlistEntry' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AllowlistEntry:
+      type: object
+      required: [cidr]
+      properties:
+        cidr: { type: string, description: "IP or CIDR, stored in normalised prefix form." }
+        note: { type: string }
+    AllowlistInput:
+      type: object
+      description: Create/update payload. Scope + enabled default to true when omitted.
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        enabled: { type: boolean }
+        scopeBlock: { type: boolean }
+        scopeThrottle: { type: boolean }
+        scopeAudit: { type: boolean }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/AllowlistEntry' }

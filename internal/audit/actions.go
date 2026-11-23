@@ -173,6 +173,14 @@ const (
 	ActionAlertRuleUpdated = "alert_rule_updated"
 	ActionAlertRuleDeleted = "alert_rule_deleted"
 
+	// #364 — AreNET allowlist lifecycle (3). Emitted by the
+	// /security/allowlists CRUD handlers on successful create /
+	// update / delete. Entries are IP/CIDR + operator notes, no
+	// secrets, so full diff in BeforeJSON / AfterJSON. Admin-gated.
+	ActionAllowlistCreated = "allowlist_created"
+	ActionAllowlistUpdated = "allowlist_updated"
+	ActionAllowlistDeleted = "allowlist_deleted"
+
 	// Step R — operator-defined HTML error page templates (3).
 	// Body content is operator-typed HTML, no secrets ; full
 	// diff in BeforeJSON / AfterJSON. Same admin-only gating
@@ -380,6 +388,9 @@ var allActions = []string{
 	ActionExternalCertUpdated,
 	ActionExternalCertDeleted,
 	ActionExternalCertCSRGenerated,
+	ActionAllowlistCreated,
+	ActionAllowlistUpdated,
+	ActionAllowlistDeleted,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

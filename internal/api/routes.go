@@ -298,6 +298,11 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// Optional scope / scenario / srcIp / onlyActive
 			// filters. Same AC #15 contract.
 			r.Get("/security/decisions", h.securityDecisions)
+			// #364 — AreNET allowlist reads (viewer). The writes
+			// live in the admin group below. Exempt trusted IPs
+			// from AreNET Security Automation auto-bans.
+			r.Get("/security/allowlists", h.listAllowlists)
+			r.Get("/security/allowlists/{slug}", h.getAllowlist)
 			// Step U.3 — cert lifecycle event log. Pure
 			// event-shaped read of the cert_event table (U.1
 			// schema v5, populated by the U.2 sink that
@@ -585,6 +590,12 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// the new automation_reset action. Mirror of
 				// CS.2.C f1fe919 (crowdsec_reset).
 				r.Delete("/settings/automation/credentials", h.deleteAutomationCredentials)
+				// #364 — AreNET allowlist writes (admin). Each
+				// mutation audits + rebuilds the live trigger's
+				// resolver snapshot (no restart).
+				r.Post("/security/allowlists", h.createAllowlist)
+				r.Put("/security/allowlists/{slug}", h.updateAllowlist)
+				r.Delete("/security/allowlists/{slug}", h.deleteAllowlist)
 				// Step V.4 — server geographic position writes.
 				// PUT installs a manual override; POST :redetect
 				// re-runs the V.1 ipify-then-GeoIP path (useful
