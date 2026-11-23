@@ -219,12 +219,18 @@ describe('Sidebar', () => {
 		const allLinks = screen.getAllByRole('link', { hidden: false });
 		const hrefs = allLinks.map((l) => l.getAttribute('href'));
 		expect(hrefs).not.toContain('/security/decisions');
-		// The catch-all route /security/[routeId] doesn't
-		// resolve to a single static href; just make sure no
-		// link points under /security/ that isn't /security
-		// itself.
+		// The catch-all route /security/[routeId] doesn't resolve to a
+		// single static href; make sure no DRILL-DOWN link points under
+		// /security/. The one deliberate exception is /security/allowlists
+		// (#364), a real top-level nav destination that happens to live
+		// under /security/ for URL organisation — the Security section's
+		// own page, not a per-route drill-down.
 		const securitySubLinks = hrefs.filter(
-			(h) => h !== null && h.startsWith('/security/') && h !== '/security'
+			(h) =>
+				h !== null &&
+				h.startsWith('/security/') &&
+				h !== '/security' &&
+				h !== '/security/allowlists'
 		);
 		expect(securitySubLinks).toEqual([]);
 	});

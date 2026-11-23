@@ -79,6 +79,7 @@
 		| 'tcp'
 		| 'logs'
 		| 'waf'
+		| 'allowlist'
 		| 'security'
 		| 'certs'
 		| 'users'
@@ -131,6 +132,7 @@
 			labelKey: 'sidebar.sectionSecurity',
 			items: [
 				{ href: '/waf', labelKey: 'sidebar.navWAF', icon: 'waf' },
+				{ href: '/security/allowlists', labelKey: 'sidebar.navAllowlists', icon: 'allowlist' },
 				{ href: '/security', labelKey: 'sidebar.navSecurity', icon: 'security' },
 				{ href: '/certs', labelKey: 'sidebar.navCertificates', icon: 'certs' },
 				// AL.4.b.1 — alerting subsystem entry.
@@ -230,6 +232,9 @@
 			<path d="M5 6h6M5 8.5h6M5 11h4" />
 		{:else if icon === 'waf'}
 			<path d="M8 1l5 2v5c0 3.5-2.5 6-5 7-2.5-1-5-3.5-5-7V3l5-2z" />
+		{:else if icon === 'allowlist'}
+			<path d="M8 1l5 2v5c0 3.5-2.5 6-5 7-2.5-1-5-3.5-5-7V3l5-2z" />
+			<path d="M5.8 8l1.6 1.6L10.4 6" />
 		{:else if icon === 'security'}
 			<rect x="3" y="7" width="10" height="7" rx="1" />
 			<path d="M5 7V5a3 3 0 016 0v2" />
