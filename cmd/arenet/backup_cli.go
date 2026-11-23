@@ -26,11 +26,42 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/barto95100/arenet/internal/allowlist"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/backup"
 	appconfig "github.com/barto95100/arenet/internal/config"
 	"github.com/barto95100/arenet/internal/storage"
 )
+
+// openAllowlistForCLI opens the security.db next to the BoltDB for the
+// offline backup CLI (#372). Fail-open: a missing/unreadable store returns
+// nil (allowlists simply excluded), logged as a WARN.
+func openAllowlistForCLI(ctx context.Context, logger *slog.Logger, dbPath string) *allowlist.Store {
+	p := filepath.Join(filepath.Dir(dbPath), "security.db")
+	s, err := allowlist.Open(ctx, p)
+	if err != nil {
+		logger.Warn("backup: security.db unavailable — allowlists excluded", "path", p, "err", err)
+		return nil
+	}
+	return s
+}
+
+// nilSafeAllowlistSource / nilSafeAllowlistSink convert a possibly-nil *allowlist.Store
+// to a nil backup interface (not a non-nil interface wrapping a nil pointer),
+// so the variadic optional-dependency check in backup works correctly.
+func nilSafeAllowlistSource(s *allowlist.Store) backup.AllowlistSource {
+	if s == nil {
+		return nil
+	}
+	return s
+}
+
+func nilSafeAllowlistSink(s *allowlist.Store) backup.AllowlistSink {
+	if s == nil {
+		return nil
+	}
+	return s
+}
 
 // Step K.3 — CLI export / restore.
 //
@@ -76,6 +107,14 @@ func runExportCLI(ctx context.Context, logger *slog.Logger, cfg *appconfig.Confi
 	}
 	users := auth.NewUserStore(store.DB())
 
+	// #372 — allowlists live in a separate security.db; open it so the
+	// export carries them too. nil on failure (fail-open for export: a
+	// missing security.db just means no allowlists section).
+	alStore := openAllowlistForCLI(ctx, logger, dbPath)
+	if alStore != nil {
+		defer func() { _ = alStore.Close() }()
+	}
+
 	var passphrase string
 	if cfg.IncludeSecrets {
 		if passphrase, err = backupPassphrase(cfg, os.Getenv); err != nil {
@@ -90,7 +129,7 @@ func runExportCLI(ctx context.Context, logger *slog.Logger, cfg *appconfig.Confi
 				"the file can only be restored without its secrets.")
 	}
 
-	snap, err := backup.Export(ctx, store, users, version, cfg.IncludeSecrets)
+	snap, err := backup.Export(ctx, store, users, version, cfg.IncludeSecrets, nilSafeAllowlistSource(alStore))
 	if err != nil {
 		return fmt.Errorf("export: %w", err)
 	}
@@ -171,10 +210,17 @@ func runRestoreCLI(ctx context.Context, logger *slog.Logger, cfg *appconfig.Conf
 	}
 	users := auth.NewUserStore(store.DB())
 
+	// #372 — restore allowlists into security.db. Offline tool: no live
+	// resolver to rebuild; the next `arenet` boot rebuilds it from the DB.
+	alStore := openAllowlistForCLI(ctx, logger, dbPath)
+	if alStore != nil {
+		defer func() { _ = alStore.Close() }()
+	}
+
 	report, err := backup.Import(ctx, store, users, &snap, backup.ImportOptions{
 		AllowIncompleteRestore: cfg.AllowIncompleteRestore,
 		AllowEmptyUsers:        cfg.AllowEmptyUsers,
-	})
+	}, nilSafeAllowlistSink(alStore))
 	if err != nil {
 		// Print the full actionable message to stderr — the
 		// operator needs the "two paths forward" wording verbatim.

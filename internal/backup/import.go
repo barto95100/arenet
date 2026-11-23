@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/barto95100/arenet/internal/allowlist"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/google/uuid"
@@ -160,11 +161,21 @@ func Import(ctx context.Context, store ImportStorer, users UserStorer, snap *Sna
 	// sink fails (e.g. security.db unavailable), the import stops here
 	// and returns a hard error — no silent partial restore, no silent
 	// fallback to an empty allowlist. The BoltDB restore stays committed
-	// (the operator is told the allowlist step failed).
+	// (the operator is told the allowlist step failed, non-zero).
 	//
-	// STUB (RED): the restore is not wired yet, so the roundtrip /
-	// replace / degraded guards fail first.
-	_ = firstAllowlistSink(allowlists)
+	// ReplaceAll is a full replacement: a pre-v2.85.0 snapshot carries no
+	// allowlists (nil slice) → the store is wiped clean, which is the
+	// correct back-compat outcome.
+	if sink := firstAllowlistSink(allowlists); sink != nil {
+		var lists []allowlist.Allowlist
+		if resolved.Extras != nil {
+			lists = resolved.Extras.Allowlists
+		}
+		if err := sink.ReplaceAll(ctx, lists); err != nil {
+			return nil, fmt.Errorf("import: restore allowlists: %w", err)
+		}
+		report.AllowlistsImported = len(lists)
+	}
 
 	return report, nil
 }

@@ -84,6 +84,10 @@ type Config struct {
 	Users   backup.UserStorer
 	DataDir string
 	Version string
+	// Allowlists (#372) is the optional AreNET allowlist source so
+	// scheduled backups carry security.db too. nil ⇒ no allowlists
+	// section (degraded / not wired).
+	Allowlists backup.AllowlistSource
 	// Optional: failure alerts / audit trail / mailer / clock.
 	Dispatcher Dispatcher
 	Audit      AuditAppender
@@ -248,7 +252,7 @@ func (s *Service) writeBackup(ctx context.Context, sched storage.BackupScheduleC
 	if err := CheckDir(dir, sched.Dir == ""); err != nil {
 		return nil, err
 	}
-	snap, err := backup.Export(ctx, s.cfg.Store, s.cfg.Users, s.cfg.Version, true)
+	snap, err := backup.Export(ctx, s.cfg.Store, s.cfg.Users, s.cfg.Version, true, s.cfg.Allowlists)
 	if err != nil {
 		return nil, fmt.Errorf("export: %w", err)
 	}

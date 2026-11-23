@@ -2047,6 +2047,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		Dispatcher: alertingDispatcher,
 		Audit:      auditStore,
 		Logger:     logger,
+		// #372 — scheduled backups carry the allowlists (security.db) too.
+		Allowlists: nilSafeAllowlistSource(alStore),
 	})
 	applyBackupSchedule := func(bc storage.BackupScheduleConfig) {
 		autoBackup.Apply(ctx, bc)

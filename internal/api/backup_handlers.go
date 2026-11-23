@@ -98,7 +98,7 @@ func (h *Handler) getBackup(w http.ResponseWriter, r *http.Request) {
 			"exports with secrets are encrypted: POST /api/v1/admin/backup with {\"passphrase\": \"…\"}", nil)
 		return
 	}
-	snap, err := backup.Export(r.Context(), h.store, h.users, h.backupVersion(), false)
+	snap, err := backup.Export(r.Context(), h.store, h.users, h.backupVersion(), false, h.allowlists)
 	if err != nil {
 		h.logger.Error("backup: export failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to export configuration")
@@ -122,7 +122,7 @@ func (h *Handler) postBackup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
-	snap, err := backup.Export(r.Context(), h.store, h.users, h.backupVersion(), true)
+	snap, err := backup.Export(r.Context(), h.store, h.users, h.backupVersion(), true, h.allowlists)
 	if err != nil {
 		h.logger.Error("backup: export failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to export configuration")
@@ -272,7 +272,7 @@ func (h *Handler) restoreBytes(w http.ResponseWriter, r *http.Request, body []by
 	//     resolution pass needed for the rollback re-apply),
 	//   - the input survives in process memory only and is
 	//     discarded before this handler returns.
-	preSnapshot, err := backup.Export(r.Context(), h.store, h.users, h.backupVersion(), true)
+	preSnapshot, err := backup.Export(r.Context(), h.store, h.users, h.backupVersion(), true, h.allowlists)
 	if err != nil {
 		h.appendAudit(r, audit.Event{
 			Action:  audit.ActionConfigRestoredRejected,
@@ -293,7 +293,7 @@ func (h *Handler) restoreBytes(w http.ResponseWriter, r *http.Request, body []by
 
 	// Build an ImportStorer adapter — the Handler.store is a
 	// *storage.Store which already implements every method.
-	report, err := backup.Import(r.Context(), h.store, h.users, &snap, opts)
+	report, err := backup.Import(r.Context(), h.store, h.users, &snap, opts, h.allowlists)
 	if err != nil {
 		reason := classifyRestoreError(err)
 		h.appendAudit(r, audit.Event{
@@ -356,6 +356,11 @@ func (h *Handler) restoreBytes(w http.ResponseWriter, r *http.Request, body []by
 	if report.ExtrasImported {
 		h.applyRestoredSettings(r.Context())
 	}
+
+	// #372 — the allowlists were written to security.db by backup.Import
+	// (sink). Rebuild the live trigger's resolver so the restored
+	// exemptions take effect without a restart.
+	h.rebuildAllowlist(r.Context())
 
 	h.appendAudit(r, audit.Event{
 		Action: audit.ActionConfigRestored,
