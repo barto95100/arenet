@@ -115,6 +115,19 @@ func (f *fakeWriter) lastAlert() Alert {
 	return f.alerts[len(f.alerts)-1]
 }
 
+// pushedSet returns the set of (scenario → src_ip) pairs pushed so far.
+// Used by the non-regression golden to assert the emitted intent set
+// independent of push order.
+func (f *fakeWriter) pushedSet() map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]string, len(f.alerts))
+	for _, a := range f.alerts {
+		out[a.Scenario] = a.Source.Value
+	}
+	return out
+}
+
 // fakeAuditEmitter records audit emission calls.
 type fakeAuditEmitter struct {
 	mu    sync.Mutex
@@ -661,5 +674,89 @@ func TestTriggerEngine_OnTombstone_NaturalExpiry_NoCooldown(t *testing.T) {
 	}
 	if _, hit := e.dedupe.Lookup("Ip", "1.2.3.4", "arenet/waf-sqli"); hit {
 		t.Error("expiry must still invalidate the dedupe so the source is re-evaluated against LAPI")
+	}
+}
+
+// enableRuleOn mutates rs in place to enable one source with the given
+// thresholds. Lets a test enable several categories at once (the single-
+// source enableRule helper replaces the whole RuleSet each call).
+func enableRuleOn(rs *RuleSet, s Source, threshold int, window, duration, cooldown time.Duration) {
+	r := rs.Rules[s]
+	r.Enabled = true
+	r.Threshold = threshold
+	r.Window = window
+	r.Duration = duration
+	r.Cooldown = cooldown
+	rs.Rules[s] = r
+}
+
+// TestTrigger_NilAllowlistChecker_EmitsUnchangedIntents is the #364
+// non-regression GOLDEN, captured on v2.84.5 before the allowlist hook
+// exists. It pins the full multi-category emission set — one block
+// (waf-rce), one throttle (throttle-tier1), one audit (auth-burst) vector,
+// each from a distinct IP meeting threshold. After the allowlist hook is
+// added, this test (with NO AllowlistChecker configured — the nil default)
+// MUST still produce this exact set: a user who never creates an allowlist
+// sees byte-identical behaviour. If adding the hook changes this set, the
+// hook leaked into the default path.
+func TestTrigger_NilAllowlistChecker_EmitsUnchangedIntents(t *testing.T) {
+	now := time.Now()
+	mk := func(id, ip string, src Source, offset time.Duration) SourceEvent {
+		return SourceEvent{ID: id, Ts: now.Add(offset), SrcIP: ip, Source: src, TriggeringEventID: id}
+	}
+	waf := &fakeWafReader{events: []SourceEvent{
+		mk("w1", "10.0.0.1", SourceWafRCE, -20*time.Second),
+		mk("w2", "10.0.0.1", SourceWafRCE, -10*time.Second),
+	}}
+	throttle := &fakeThrottleReader{events: []SourceEvent{
+		mk("t1", "10.0.0.2", SourceThrottleTier1, -20*time.Second),
+		mk("t2", "10.0.0.2", SourceThrottleTier1, -10*time.Second),
+	}}
+	audit := &fakeAuditReader{events: []SourceEvent{
+		mk("a1", "10.0.0.3", SourceAuthBurst, -20*time.Second),
+		mk("a2", "10.0.0.3", SourceAuthBurst, -10*time.Second),
+	}}
+
+	rs := DefaultRuleSet()
+	enableRuleOn(&rs, SourceWafRCE, 2, 60*time.Second, 4*time.Hour, 24*time.Hour)
+	enableRuleOn(&rs, SourceThrottleTier1, 2, 60*time.Second, 4*time.Hour, 24*time.Hour)
+	enableRuleOn(&rs, SourceAuthBurst, 2, 60*time.Second, 4*time.Hour, 24*time.Hour)
+	holder := NewRuleSetHolder(rs)
+	writer := &fakeWriter{}
+
+	e, err := NewEngine(EngineConfig{
+		Waf: waf, Throttle: throttle, Audit: audit,
+		Rules: holder, Writer: writer, Logger: silentLogger(),
+		// AllowlistChecker deliberately left nil — the default path.
+		TickInterval:        20 * time.Millisecond,
+		Now:                 func() time.Time { return now },
+		InitialCursorOffset: -1 * time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go e.Run(ctx)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && writer.alertCount() < 3 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-e.Done()
+
+	want := map[string]string{
+		"arenet/waf-rce":        "10.0.0.1",
+		"arenet/throttle-tier1": "10.0.0.2",
+		"arenet/auth-burst":     "10.0.0.3",
+	}
+	got := writer.pushedSet()
+	if len(got) != len(want) {
+		t.Fatalf("pushed set size = %d, want %d; got=%v", len(got), len(want), got)
+	}
+	for scenario, ip := range want {
+		if got[scenario] != ip {
+			t.Errorf("scenario %q: src_ip = %q, want %q", scenario, got[scenario], ip)
+		}
 	}
 }
