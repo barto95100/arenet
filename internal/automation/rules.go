@@ -72,6 +72,26 @@ func (s Source) Scenario() string {
 	return "arenet/" + string(s)
 }
 
+// Category is the allowlist scope bucket a Source falls into (#364 spec
+// D4). The AreNET allowlist exposes three scope checkboxes; every Source
+// maps to exactly one of them.
+type Category string
+
+const (
+	CategoryBlock    Category = "block"    // waf-*
+	CategoryThrottle Category = "throttle" // throttle-tier*
+	CategoryAudit    Category = "audit"    // auth-*
+)
+
+// Category maps a Source to its allowlist scope category (#364 spec D4):
+// waf-* → block, throttle-* → throttle, auth-* → audit.
+//
+// STUB (RED): returns a fixed value so the guard TestSourceCategory_Mapping_G
+// fails first; the real prefix-based mapping lands with the allowlist hook.
+func (s Source) Category() Category {
+	return CategoryBlock
+}
+
 // IsKnown reports whether s is one of the AllSources values.
 // Validation gate for the rule set on PUT.
 func (s Source) IsKnown() bool {
