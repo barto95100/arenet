@@ -77,6 +77,12 @@ func Export(ctx context.Context, store Storer, users UserStorer, arenetVersion s
 	if store == nil || users == nil {
 		return nil, errors.New("backup: nil store")
 	}
+	// The variadic is an OPTIONAL single dependency (#372): zero = no
+	// allowlists, one = the source. More than one is a programmer error
+	// (which source wins?) — reject it loudly rather than silently pick [0].
+	if len(allowlists) > 1 {
+		return nil, errors.New("backup: at most one allowlist source may be passed")
+	}
 
 	routes, err := store.ListRoutes(ctx)
 	if err != nil {
