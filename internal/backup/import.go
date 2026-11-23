@@ -70,6 +70,11 @@ func Import(ctx context.Context, store ImportStorer, users UserStorer, snap *Sna
 	if snap == nil {
 		return nil, errors.New("import: nil snapshot")
 	}
+	// Optional single dependency (#372): reject >1 sink as a programmer
+	// error rather than silently picking the first.
+	if len(allowlists) > 1 {
+		return nil, errors.New("import: at most one allowlist sink may be passed")
+	}
 	if store == nil || users == nil {
 		return nil, errors.New("import: nil store")
 	}

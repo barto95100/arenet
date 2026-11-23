@@ -183,3 +183,22 @@ func TestBackupAllowlist_NoSecretRedaction_G(t *testing.T) {
 		t.Errorf("allowlist CIDR should be cleartext in a no-secrets export; it is not a secret")
 	}
 }
+
+// TestBackupAllowlist_RejectsMultipleSources_G guards the variadic
+// optional-dependency contract (#372): the allowlist source/sink is
+// zero-or-one. Passing more than one is a programmer error (ambiguous
+// which wins) and must be rejected loudly, not silently resolved to [0].
+func TestBackupAllowlist_RejectsMultipleSources_G(t *testing.T) {
+	ctx := context.Background()
+	src, srcUsers := newTestStoreWithUserStore(t)
+	a1 := newAllowlistStore(t)
+	a2 := newAllowlistStore(t)
+
+	if _, err := Export(ctx, src, srcUsers, "test", true, a1, a2); err == nil {
+		t.Error("Export must reject more than one allowlist source")
+	}
+	dst, dstUsers := newTestStoreWithUserStore(t)
+	if _, err := Import(ctx, dst, dstUsers, &Snapshot{}, ImportOptions{AllowEmptyUsers: true}, a1, a2); err == nil {
+		t.Error("Import must reject more than one allowlist sink")
+	}
+}
