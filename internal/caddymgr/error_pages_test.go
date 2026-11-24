@@ -130,9 +130,9 @@ func TestBuildErrorRoutesForRoute_EmitsOnePerSupportedCode(t *testing.T) {
 		if len(r.Match[0].Host) != 1 || r.Match[0].Host[0] != "example.com" {
 			t.Errorf("route[%d] host scope = %v ; want [example.com]", i, r.Match[0].Host)
 		}
-		// Handler is static_response.
-		if len(r.Handle) != 1 || r.Handle[0]["handler"] != "static_response" {
-			t.Errorf("route[%d] handler = %v ; want static_response", i, r.Handle)
+		// Handlers: arenet_error_vars (#367) then static_response.
+		if len(r.Handle) != 2 || r.Handle[0]["handler"] != "arenet_error_vars" || r.Handle[1]["handler"] != "static_response" {
+			t.Errorf("route[%d] handlers = %v ; want [arenet_error_vars, static_response]", i, r.Handle)
 		}
 	}
 	// The final route is the generic fallback: host-scoped, NO per-code
@@ -338,7 +338,7 @@ func TestErrorPageSanitizer_StripsScriptTag(t *testing.T) {
 	var body403 string
 	for i, code := range storage.SupportedErrorStatusCodes {
 		if code == 403 {
-			body403 = got[i].Handle[0]["body"].(string)
+			body403 = staticResponseHandler(got[i])["body"].(string)
 			break
 		}
 	}
@@ -364,7 +364,7 @@ func TestErrorPageSanitizer_StripsEventHandlers(t *testing.T) {
 	var body string
 	for i, code := range storage.SupportedErrorStatusCodes {
 		if code == 404 {
-			body = got[i].Handle[0]["body"].(string)
+			body = staticResponseHandler(got[i])["body"].(string)
 			break
 		}
 	}
@@ -390,7 +390,7 @@ func TestErrorPageSanitizer_PrependsDoctype(t *testing.T) {
 	var body string
 	for i, code := range storage.SupportedErrorStatusCodes {
 		if code == 502 {
-			body = got[i].Handle[0]["body"].(string)
+			body = staticResponseHandler(got[i])["body"].(string)
 			break
 		}
 	}
@@ -425,7 +425,7 @@ func TestErrorPageSanitizer_PreservesCaddyPlaceholders(t *testing.T) {
 	var body string
 	for i, code := range storage.SupportedErrorStatusCodes {
 		if code == 500 {
-			body = got[i].Handle[0]["body"].(string)
+			body = staticResponseHandler(got[i])["body"].(string)
 			break
 		}
 	}
@@ -526,9 +526,15 @@ func TestBuildConfigJSON_EmitsErrorsBlock_WhenAnyRouteOptsIn(t *testing.T) {
 		t.Errorf("expression matcher = %v ; want {http.error.status_code} == <code>", expr)
 	}
 	handle := r0["handle"].([]any)
+	// #367: arenet_error_vars runs first (sets {arenet.request.*}),
+	// then static_response renders.
 	h0 := handle[0].(map[string]any)
-	if h0["handler"] != "static_response" {
-		t.Errorf("handler = %v ; want static_response", h0["handler"])
+	if h0["handler"] != "arenet_error_vars" {
+		t.Errorf("handle[0].handler = %v ; want arenet_error_vars", h0["handler"])
+	}
+	h1 := handle[1].(map[string]any)
+	if h1["handler"] != "static_response" {
+		t.Errorf("handle[1].handler = %v ; want static_response", h1["handler"])
 	}
 }
 
@@ -926,11 +932,15 @@ func TestBuildErrorRoutesForRoute_EmitsGenericFallback(t *testing.T) {
 	if len(last.Handle) == 0 {
 		t.Fatal("fallback route has no handler")
 	}
-	body, _ := last.Handle[0]["body"].(string)
+	sr := staticResponseHandler(last)
+	if sr == nil {
+		t.Fatal("fallback route has no static_response handler")
+	}
+	body, _ := sr["body"].(string)
 	if body == "" {
 		t.Error("fallback route serves an empty body — defeats the purpose")
 	}
-	sc, _ := last.Handle[0]["status_code"].(string)
+	sc, _ := sr["status_code"].(string)
 	if sc != "{http.error.status_code}" {
 		t.Errorf("fallback status_code = %q; want the live placeholder {http.error.status_code}", sc)
 	}

@@ -1215,6 +1215,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1236,6 +1239,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1259,6 +1265,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1280,6 +1289,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1303,6 +1315,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1324,6 +1339,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1347,6 +1365,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1369,6 +1390,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1389,6 +1413,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1412,6 +1439,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1433,6 +1463,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1456,6 +1489,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1477,6 +1513,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1500,6 +1539,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1521,6 +1563,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1544,6 +1589,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1566,6 +1614,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1586,6 +1637,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1609,6 +1663,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1630,6 +1687,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1653,6 +1713,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1674,6 +1737,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1697,6 +1763,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1718,6 +1787,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1741,6 +1813,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1763,6 +1838,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1783,6 +1861,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1806,6 +1887,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1827,6 +1911,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1850,6 +1937,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1871,6 +1961,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1894,6 +1987,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1915,6 +2011,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -1938,6 +2037,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1960,6 +2062,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -1980,6 +2085,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -2003,6 +2111,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -2024,6 +2135,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -2047,6 +2161,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -2068,6 +2185,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -2091,6 +2211,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -2112,6 +2235,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -2135,6 +2261,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -2157,6 +2286,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -2177,6 +2309,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -2200,6 +2335,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -2221,6 +2359,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -2244,6 +2385,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -2265,6 +2409,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -2288,6 +2435,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -2309,6 +2459,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
@@ -2332,6 +2485,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -2354,6 +2510,9 @@
                 ],
                 "handle": [
                   {
+                    "handler": "arenet_error_vars"
+                  },
+                  {
                     "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
                     "headers": {
@@ -2374,6 +2533,9 @@
                   }
                 ],
                 "handle": [
+                  {
+                    "handler": "arenet_error_vars"
+                  },
                   {
                     "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
                     "handler": "static_response",
