@@ -238,6 +238,46 @@ describe('/settings/error-pages — editor', () => {
 		}
 	});
 
+	// #384 — switching code tabs must load THAT code's body in the real
+	// CodeMirror editor. This is the wiring/display guard (onclick →
+	// selectCode → activeBuffer → editor rehydrate). The silent
+	// data-loss mechanism (typed edit clobbering the target code) is
+	// guarded precisely by the pure applyCodeSwitch unit test in
+	// error-page-edit.test.ts.
+	it('loads the opened code body when switching tabs (#384 wiring)', async () => {
+		const stored = sampleTemplate({
+			id: 't1',
+			name: 'Brand',
+			pages: { '403': '<h1>FOUR-OH-THREE</h1>', '404': '<h1>FOUR-OH-FOUR</h1>' }
+		});
+		apiMock.list.mockResolvedValue([stored]);
+		apiMock.get.mockResolvedValue(stored);
+		const { container } = render(Page);
+		await screen.findByText('Brand');
+		await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+		// Default tab is 403 → editor shows the 403 body.
+		await waitFor(() => {
+			expect(container.querySelector('.cm-content')?.textContent).toContain('FOUR-OH-THREE');
+		});
+
+		// Open 404 → editor must show the 404 body, not the one left.
+		await fireEvent.click(screen.getByRole('tab', { name: /^404/ }));
+		await waitFor(() => {
+			const txt = container.querySelector('.cm-content')?.textContent ?? '';
+			expect(txt).toContain('FOUR-OH-FOUR');
+			expect(txt).not.toContain('FOUR-OH-THREE');
+		});
+
+		// Back to 403 → the 403 body is still intact (not clobbered).
+		await fireEvent.click(screen.getByRole('tab', { name: /^403/ }));
+		await waitFor(() => {
+			const txt = container.querySelector('.cm-content')?.textContent ?? '';
+			expect(txt).toContain('FOUR-OH-THREE');
+			expect(txt).not.toContain('FOUR-OH-FOUR');
+		});
+	});
+
 	it('renders the Variables panel with placeholder tokens', async () => {
 		apiMock.list.mockResolvedValue([]);
 		render(Page);
