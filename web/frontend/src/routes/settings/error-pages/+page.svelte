@@ -38,6 +38,7 @@
 		type ErrorTemplate,
 		type SupportedErrorStatusCode
 	} from '$lib/api/error-templates';
+	import { applyCodeSwitch } from '$lib/error-page-edit';
 	import { pushToast } from '$lib/stores/toast';
 	import { ApiError } from '$lib/api/types';
 	import { t } from '$lib/i18n';
@@ -125,22 +126,27 @@
 	// into editPages on every change (Svelte 5 $effect).
 	let activeBuffer = $state('');
 
-	// When the active tab changes, snap activeBuffer to the
-	// corresponding editPages entry. When activeBuffer changes
-	// (user typed), write back to editPages.
-	//
-	// $state(activeCode) for the previous-tab snapshot so the
-	// effect re-reads it reactively (Svelte 5 warns when a
-	// top-level `let x = activeCode` is referenced inside an
-	// effect because it captures the initial value only — the
-	// $state wrapper makes the comparison reactive).
-	let lastActiveCode = $state<SupportedErrorStatusCode>(403);
-	$effect(() => {
-		if (activeCode !== lastActiveCode) {
-			activeBuffer = editPages[activeCode] ?? '';
-			lastActiveCode = activeCode;
-		}
-	});
+	// #384 — switching tabs is a single, race-free step: persist the
+	// buffer of the code being LEFT and load the TARGET code's body in
+	// one synchronous handler. The previous design used two competing
+	// $effects (one loading on activeCode change, one writing
+	// editPages[activeCode] = activeBuffer); their ordering raced, so the
+	// write-back could fire with the NEW activeCode but the OLD
+	// activeBuffer and clobber the target code's stored body — silent
+	// data loss. selectCode() replaces that race.
+	function selectCode(code: SupportedErrorStatusCode): void {
+		if (code === activeCode) return;
+		const res = applyCodeSwitch(editPages, activeCode, activeBuffer, code);
+		editPages = res.editPages;
+		activeCode = code;
+		activeBuffer = res.buffer;
+	}
+
+	// Live-sync the active buffer into editPages as the operator types so
+	// the preview + save payload see the current text. Safe post-#384:
+	// activeCode only changes via selectCode (which sets a consistent
+	// activeBuffer in the same tick), so this never fires with a
+	// mismatched (code, buffer) pair.
 	$effect(() => {
 		// Only write back when editing (not during reset).
 		if (view !== 'edit') return;
@@ -986,7 +992,7 @@
 						class="code-tab"
 						class:active={activeCode === code}
 						class:filled={codeHasContent(code)}
-						onclick={() => (activeCode = code)}
+						onclick={() => selectCode(code)}
 					>
 						{code}
 						{#if codeHasContent(code)}<span class="dot">●</span>{/if}
