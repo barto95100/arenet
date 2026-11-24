@@ -1352,7 +1352,13 @@
 	.pane-label .dim { font-size: 11px; }
 	.preview-frame {
 		width: 100%;
-		min-height: 380px;
+		/* #386 — grow to fill the pane and stand ≥60vh tall so the whole
+		   rendered error card, including the bottom .meta block (where the
+		   substituted placeholders show), is visible without the operator
+		   fighting a cramped 380px iframe. The parent .preview-pane /
+		   .editor-card grid row stretches to match. */
+		flex: 1;
+		min-height: 60vh;
 		background: white;
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
