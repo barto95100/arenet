@@ -24,6 +24,7 @@ import (
 
 	"github.com/microcosm-cc/bluemonday"
 
+	"github.com/barto95100/arenet/internal/errorvars"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -600,6 +601,10 @@ func buildErrorRoutesForRoute(route storage.Route, templates map[string]storage.
 				Expression: fmt.Sprintf("{http.error.status_code} == %d", code),
 			}},
 			Handle: []map[string]any{
+				// #367: set the HTML-escaped {arenet.request.*}
+				// placeholders on the Replacer BEFORE static_response
+				// expands the body. Must precede static_response.
+				{"handler": errorvars.HandlerName},
 				{
 					"handler":     "static_response",
 					"status_code": fmt.Sprintf("%d", code),
@@ -623,6 +628,9 @@ func buildErrorRoutesForRoute(route storage.Route, templates map[string]storage.
 	out = append(out, httpRoute{
 		Match: []matcherSet{{Host: hosts}},
 		Handle: []map[string]any{
+			// #367: same vars-before-static_response ordering as the
+			// per-code routes above.
+			{"handler": errorvars.HandlerName},
 			{
 				"handler":     "static_response",
 				"status_code": "{http.error.status_code}",

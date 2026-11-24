@@ -147,6 +147,15 @@ describe('ERROR_PAGE_PLACEHOLDERS', () => {
 		expect(tokens).toContain('{http.request.uri.path_escaped}');
 	});
 
+	it('offers the #367 HTML-safe host/path forms (arenet.request.*)', () => {
+		// Mirror of the Go-side errorvars guards: the readable,
+		// HTML-escaped host/path provided by arenet_error_vars must be
+		// click-to-insertable. A "trim the list" PR must not drop them.
+		const tokens = ERROR_PAGE_PLACEHOLDERS.map((p) => p.token);
+		expect(tokens).toContain('{arenet.request.host}');
+		expect(tokens).toContain('{arenet.request.path}');
+	});
+
 	it('never offers the raw request reflectors defanged by F42', () => {
 		// Mirror of TestSafeRequestPlaceholders_AllowlistIsXSSSafe_F42 on the
 		// Go side: the click-to-insert panel must not hand an operator a token

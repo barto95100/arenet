@@ -1673,7 +1673,7 @@
 		"varsExampleTooltip": "Example: {ex}",
 		"varsExampleReadOnlyTooltip": "Example: {ex} (read-only)",
 		"varsHelp": "These placeholders are substituted by Caddy at request time (not in the preview, which uses fake values).",
-		"varsF42Note": "{http.request.host} and {http.request.uri.path} are intentionally not expanded (anti-reflected-XSS protection, F42) and render as literal text if typed. Use {http.request.uri.path_escaped} to show the path safely.",
+		"varsF42Note": "{http.request.host} and {http.request.uri.path} are intentionally not expanded (anti-reflected-XSS protection, F42) and render as literal text if typed. Use {http.request.uri.path_escaped} to show the path safely. For a readable host or path (not percent-encoded), use {arenet.request.host} / {arenet.request.path} — HTML-escaped, so XSS-safe.",
 		"deleteModalTitle": "Delete template?",
 		"deleteModalBody": "Deleting \"{name}\" is irreversible. Routes that reference it will revert to the Arenet branded default.",
 		"btnDeleting": "Deleting…",

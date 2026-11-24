@@ -403,6 +403,10 @@
 			// URI + path forms stay live (v2.84.3 #365).
 			'{http.request.uri_escaped}': '/preview/path',
 			'{http.request.uri.path_escaped}': '/preview/path',
+			// #367: arenet_error_vars provides HTML-escaped host/path; the
+			// preview shows readable (non-percent-encoded) sample values.
+			'{arenet.request.host}': 'app.example.com',
+			'{arenet.request.path}': '/preview/path',
 			'{http.request.uuid}': '00000000-0000-4000-8000-000000000000',
 			'{http.request.remote.host}': '203.0.113.42',
 			'{time.now.year}': String(new Date().getFullYear()),

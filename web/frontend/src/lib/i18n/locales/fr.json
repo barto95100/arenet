@@ -1673,7 +1673,7 @@
 		"varsExampleTooltip": "Exemple : {ex}",
 		"varsExampleReadOnlyTooltip": "Exemple : {ex} (lecture seule)",
 		"varsHelp": "Ces placeholders sont remplacés par Caddy au moment de la requête (pas dans la prévisualisation, qui utilise des valeurs fictives).",
-		"varsF42Note": "{http.request.host} et {http.request.uri.path} ne sont volontairement pas expansés (protection anti-XSS reflété, F42) et s'affichent en texte littéral si vous les saisissez. Utilisez {http.request.uri.path_escaped} pour afficher le chemin proprement.",
+		"varsF42Note": "{http.request.host} et {http.request.uri.path} ne sont volontairement pas expansés (protection anti-XSS reflété, F42) et s'affichent en texte littéral si vous les saisissez. Utilisez {http.request.uri.path_escaped} pour afficher le chemin proprement. Pour un hôte ou un chemin lisible (non percent-encodé), utilisez {arenet.request.host} / {arenet.request.path} — échappés en HTML, donc sûrs contre le XSS.",
 		"deleteModalTitle": "Supprimer le template ?",
 		"deleteModalBody": "Supprimer « {name} » est irréversible. Les routes qui le référencent reviendront au défaut Arenet branded.",
 		"btnDeleting": "Suppression…",

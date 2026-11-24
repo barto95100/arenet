@@ -179,6 +179,21 @@ export const ERROR_PAGE_PLACEHOLDERS: PlaceholderDef[] = [
 		label: 'Request path, URL-escaped (safe — use instead of raw path)',
 		example: '/items'
 	},
+	// #367: AreNET-provided, HTML-escaped host/path. Unlike the raw
+	// {http.request.host}/{http.request.uri.path} (defanged by F42),
+	// these are set by the arenet_error_vars handler with
+	// html.EscapeString, so a '<' survives as &lt; — readable (NOT
+	// percent-encoded) AND XSS-safe. No Go template engine involved.
+	{
+		token: '{arenet.request.host}',
+		label: 'Requested host, HTML-safe (readable, not percent-encoded)',
+		example: 'app.example.com'
+	},
+	{
+		token: '{arenet.request.path}',
+		label: 'Requested path, HTML-safe (readable, not percent-encoded)',
+		example: '/items'
+	},
 	{
 		token: '{http.request.uuid}',
 		label: 'Per-request UUID (forensic ID)',
