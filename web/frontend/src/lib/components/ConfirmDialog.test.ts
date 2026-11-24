@@ -100,4 +100,25 @@ describe('ConfirmDialog', () => {
 			expect(cancelBtn).not.toBeDisabled();
 		});
 	});
+
+	// #377 — defensive guard behind the allowlist orphan-dialog fix. When
+	// the caller has no selection to act on (confirmDisabled), the confirm
+	// button must be greyed out and a click must not fire onConfirm.
+	it('G_delete_button_disabled_without_selection: confirmDisabled blocks the confirm button', async () => {
+		const onConfirm = vi.fn();
+		const user = userEvent.setup();
+		render(ConfirmDialog, {
+			open: true,
+			title: 'Delete allowlist',
+			message: 'Delete the allowlist ""?',
+			confirmLabel: 'Delete',
+			confirmDisabled: true,
+			onConfirm
+		});
+
+		const confirmBtn = screen.getByRole('button', { name: 'Delete' });
+		expect(confirmBtn).toBeDisabled();
+		await user.click(confirmBtn);
+		expect(onConfirm).not.toHaveBeenCalled();
+	});
 });

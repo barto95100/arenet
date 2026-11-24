@@ -144,7 +144,13 @@
 	}
 
 	async function confirmDelete() {
-		if (!deleteTarget) return;
+		// Defensive (#377, part B): with no selection there is nothing to
+		// delete — close the dialog instead of a silent early-return that
+		// leaves an orphan modal on screen.
+		if (!deleteTarget) {
+			confirmDeleteOpen = false;
+			return;
+		}
 		try {
 			await deleteAllowlist(deleteTarget.slug);
 			await load();
@@ -152,6 +158,11 @@
 		} catch (err) {
 			pushToast(serverErrorMessage(err) || tl('allowlists.deleteError'), 'danger');
 		} finally {
+			// #377, part A: ConfirmDialog never closes itself (open is
+			// bindable), so the caller must. Close BEFORE clearing the
+			// target so the dialog unmounts in the same batch and never
+			// flashes an empty name.
+			confirmDeleteOpen = false;
 			deleteTarget = null;
 		}
 	}
@@ -385,6 +396,7 @@
 	confirmLabel={tl('common.delete')}
 	cancelLabel={tl('common.cancel')}
 	confirmVariant="danger"
+	confirmDisabled={!deleteTarget}
 	onConfirm={confirmDelete}
 />
 
