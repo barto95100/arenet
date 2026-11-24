@@ -133,10 +133,14 @@ func TestBuildConfigJSON_CatchAllAppended(t *testing.T) {
 	}
 
 	handlers := unwrapHandlers(catchAll)
-	if len(handlers) != 1 {
+	// #367: catch-all is now [arenet_error_vars, static_response].
+	if len(handlers) != 2 {
 		t.Fatalf("catch-all handle malformed: %v", catchAll["handle"])
 	}
-	h := handlers[0].(map[string]any)
+	if h0, _ := handlers[0].(map[string]any); h0["handler"] != "arenet_error_vars" {
+		t.Errorf("catch-all Handle[0] = %v, want arenet_error_vars (must precede static_response)", handlers[0])
+	}
+	h := catchAllStaticResponse(t, catchAll)
 	if h["handler"] != "static_response" {
 		t.Errorf("catch-all handler = %v, want static_response", h["handler"])
 	}
@@ -235,7 +239,7 @@ func TestBuildConfigJSON_CatchAllUsesDefaultTemplate(t *testing.T) {
 	servers := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
 	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
 	catchAll := httpRoutes[len(httpRoutes)-1].(map[string]any)
-	h := unwrapHandlers(catchAll)[0].(map[string]any)
+	h := catchAllStaticResponse(t, catchAll)
 	body, _ := h["body"].(string)
 	if !strings.Contains(body, "OPERATOR-CUSTOM-CATCHALL") {
 		t.Errorf("catch-all body did not pick up the IsCatchallDefault template ; first 200 chars: %.200s", body)
@@ -270,7 +274,7 @@ func TestBuildConfigJSON_CatchAllFallsBackToBuiltinOnEmptyDefault(t *testing.T) 
 	servers := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
 	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
 	catchAll := httpRoutes[len(httpRoutes)-1].(map[string]any)
-	h := unwrapHandlers(catchAll)[0].(map[string]any)
+	h := catchAllStaticResponse(t, catchAll)
 	body, _ := h["body"].(string)
 	if !strings.Contains(body, "powered by Arenet") {
 		t.Errorf("catch-all did not fall back to builtin on empty Pages[404] ; first 200 chars: %.200s", body)
@@ -3956,6 +3960,22 @@ func unwrapHandlers(route map[string]any) []any {
 		flat = append(flat, inner...)
 	}
 	return flat
+}
+
+// catchAllStaticResponse returns the static_response handler map from a
+// catch-all route's handlers (JSON shape). Since #367 the catch-all is
+// [arenet_error_vars, static_response] (or [crowdsec, arenet_error_vars,
+// static_response]), so callers can no longer assume index 0.
+func catchAllStaticResponse(t *testing.T, catchAll map[string]any) map[string]any {
+	t.Helper()
+	for _, h := range unwrapHandlers(catchAll) {
+		hm, ok := h.(map[string]any)
+		if ok && hm["handler"] == "static_response" {
+			return hm
+		}
+	}
+	t.Fatalf("catch-all has no static_response handler: %v", catchAll["handle"])
+	return nil
 }
 
 // findRouteByHost walks the httpRoutes array (Caddy JSON config

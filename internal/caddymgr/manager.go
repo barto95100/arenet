@@ -69,6 +69,10 @@ import (
 	// that references the module.
 	"github.com/barto95100/arenet/internal/countryblock"
 
+	// #367 — arenet_error_vars handler, prefixed into the catch-all
+	// route so {arenet.request.*} resolves on a catch-all 404 too.
+	"github.com/barto95100/arenet/internal/errorvars"
+
 	// #R-TOPO-real-health-probe (Stage B, 2026-06-04) — registers
 	// the arenet_topology_hc events handler so the apps.events.
 	// subscriptions block buildConfigJSON emits is resolvable at
@@ -4256,10 +4260,16 @@ func forwardAuthDial(raw string) string {
 // this into a wall: unresolvable means allowed, and the 404 comes back.
 func catchAllRoute(templates map[string]storage.ErrorPageTemplate, crowdSec bool) httpRoute {
 	body := resolveCatchallBody(templates)
-	handle := make([]map[string]any, 0, 2)
+	handle := make([]map[string]any, 0, 3)
 	if crowdSec {
 		handle = append(handle, map[string]any{"handler": "crowdsec"})
 	}
+	// #367: the catch-all serves an error-page body via this INLINE
+	// static_response, which does NOT traverse the server errors.routes
+	// chain. So it needs its own arenet_error_vars prefix (immediately
+	// before static_response) for {arenet.request.host|path} to resolve
+	// — otherwise they render as literal tokens on a catch-all 404.
+	handle = append(handle, map[string]any{"handler": errorvars.HandlerName})
 	handle = append(handle, map[string]any{
 		"handler":     "static_response",
 		"status_code": 404,
