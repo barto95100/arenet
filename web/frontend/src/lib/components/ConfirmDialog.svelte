@@ -31,6 +31,9 @@
     cancelLabel    — string (default 'Cancel')
     confirmVariant — Button variant ('primary'|'secondary'|'ghost'|'danger'),
                      default 'danger' since the common case is destructive
+    confirmDisabled— boolean (default false). Greys out the confirm button
+                     and blocks handleConfirm. Lets a caller refuse the
+                     action when there is nothing selected to act on (#377).
     onConfirm      — () => void | Promise<void>
 -->
 <script lang="ts">
@@ -46,6 +49,7 @@
 		confirmLabel?: string;
 		cancelLabel?: string;
 		confirmVariant?: ConfirmVariant;
+		confirmDisabled?: boolean;
 		onConfirm: () => void | Promise<void>;
 	}
 
@@ -56,6 +60,7 @@
 		confirmLabel = 'Confirm',
 		cancelLabel = 'Cancel',
 		confirmVariant = 'danger',
+		confirmDisabled = false,
 		onConfirm
 	}: Props = $props();
 
@@ -70,6 +75,9 @@
 	}
 
 	async function handleConfirm(): Promise<void> {
+		// Belt-and-braces with the disabled button: never run the action
+		// when the caller has disabled it (#377).
+		if (confirmDisabled) return;
 		submitting = true;
 		try {
 			await onConfirm();
@@ -88,7 +96,12 @@
 			<Button variant="ghost" onclick={onClose} disabled={submitting}>
 				{cancelLabel}
 			</Button>
-			<Button variant={confirmVariant} onclick={handleConfirm} loading={submitting}>
+			<Button
+				variant={confirmVariant}
+				onclick={handleConfirm}
+				loading={submitting}
+				disabled={confirmDisabled}
+			>
 				{confirmLabel}
 			</Button>
 		{/snippet}
