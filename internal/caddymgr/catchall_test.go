@@ -19,6 +19,7 @@ package caddymgr
 import (
 	"testing"
 
+	"github.com/barto95100/arenet/internal/errorvars"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -36,14 +37,19 @@ import (
 func TestCatchAllRoute_NoCrowdSecWhenUnconfigured(t *testing.T) {
 	route := catchAllRoute(nil, false)
 
-	if len(route.Handle) != 1 {
-		t.Fatalf("want the 404 alone, got %d handlers: %v", len(route.Handle), route.Handle)
+	// #367: arenet_error_vars (sets {arenet.request.*}) then the 404.
+	if len(route.Handle) != 2 {
+		t.Fatalf("want [arenet_error_vars, static_response], got %d handlers: %v", len(route.Handle), route.Handle)
 	}
-	if route.Handle[0]["handler"] != "static_response" {
-		t.Fatalf("handler: got %v", route.Handle[0])
+	if route.Handle[0]["handler"] != errorvars.HandlerName {
+		t.Fatalf("Handle[0] must be arenet_error_vars, got %v", route.Handle[0])
 	}
-	if route.Handle[0]["status_code"] != 404 {
-		t.Fatalf("status_code: got %v", route.Handle[0]["status_code"])
+	sr := staticResponseHandler(route)
+	if sr == nil {
+		t.Fatalf("no static_response handler: %v", route.Handle)
+	}
+	if sr["status_code"] != 404 {
+		t.Fatalf("status_code: got %v", sr["status_code"])
 	}
 	// The catch-all must stay unmatched, or it stops being one.
 	if len(route.Match) != 0 {
@@ -57,19 +63,25 @@ func TestCatchAllRoute_NoCrowdSecWhenUnconfigured(t *testing.T) {
 func TestCatchAllRoute_CrowdSecFirstThen404(t *testing.T) {
 	route := catchAllRoute(nil, true)
 
-	if len(route.Handle) != 2 {
-		t.Fatalf("want [crowdsec, static_response], got %v", route.Handle)
+	// #367: [crowdsec, arenet_error_vars, static_response]. crowdsec
+	// still first (refuse banned source before anything); arenet_error_vars
+	// immediately before static_response (sets {arenet.request.*}).
+	if len(route.Handle) != 3 {
+		t.Fatalf("want [crowdsec, arenet_error_vars, static_response], got %v", route.Handle)
 	}
 	if route.Handle[0]["handler"] != "crowdsec" {
 		t.Fatalf("crowdsec must come first, got %v", route.Handle[0])
 	}
+	if route.Handle[1]["handler"] != errorvars.HandlerName {
+		t.Fatalf("arenet_error_vars must precede static_response, got %v", route.Handle[1])
+	}
 	// Order is the whole point: after the static_response the answer is
 	// already written and the bouncer could refuse nothing.
-	if route.Handle[1]["handler"] != "static_response" {
-		t.Fatalf("the 404 must remain, got %v", route.Handle[1])
+	if route.Handle[2]["handler"] != "static_response" {
+		t.Fatalf("the 404 must remain last, got %v", route.Handle[2])
 	}
-	if route.Handle[1]["status_code"] != 404 {
-		t.Fatalf("status_code: got %v", route.Handle[1]["status_code"])
+	if route.Handle[2]["status_code"] != 404 {
+		t.Fatalf("status_code: got %v", route.Handle[2]["status_code"])
 	}
 	if len(route.Match) != 0 {
 		t.Fatalf("the catch-all must match everything, got %v", route.Match)
@@ -83,16 +95,18 @@ func TestCatchAllRoute_BodyUnchanged(t *testing.T) {
 	plain := catchAllRoute(templates, false)
 	gated := catchAllRoute(templates, true)
 
-	body := plain.Handle[0]["body"]
+	plainSR := staticResponseHandler(plain)
+	gatedSR := staticResponseHandler(gated)
+	body := plainSR["body"]
 	if body == nil || body == "" {
 		t.Fatal("the catch-all must carry a body")
 	}
 	// Adding the bouncer must not change what the 404 says.
-	if gated.Handle[1]["body"] != body {
+	if gatedSR["body"] != body {
 		t.Fatalf("the body changed when CrowdSec was enabled:\n plain: %v\n gated: %v",
-			body, gated.Handle[1]["body"])
+			body, gatedSR["body"])
 	}
-	if gated.Handle[1]["headers"] == nil {
+	if gatedSR["headers"] == nil {
 		t.Fatal("the Content-Type header must survive")
 	}
 }
