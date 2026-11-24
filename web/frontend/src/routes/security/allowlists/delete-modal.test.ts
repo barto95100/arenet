@@ -62,23 +62,33 @@ describe('allowlists page — delete confirmation', () => {
 		vi.clearAllMocks();
 	});
 
-	it('G_delete_modal_closes_after_success: confirming a delete closes the dialog', async () => {
+	it('G_delete_modal_closes_after_success: the full open→confirm→success sequence closes the dialog and clears the target', async () => {
 		vi.mocked(listAllowlists).mockResolvedValueOnce([sample]).mockResolvedValue([]);
 		const user = userEvent.setup();
 		render(Page);
 
-		// Row rendered after onMount(load).
+		// 1. a row is listed (after onMount(load)).
 		await screen.findByText('test');
-		// Open the confirm dialog from the row's Delete action (the only
-		// "Delete" button before the dialog mounts).
+		// 2. open the confirm dialog from the row's Delete action (the only
+		//    "Delete" button before the dialog mounts).
 		await user.click(screen.getByRole('button', { name: 'Delete' }));
+		// dialog is open and names the real target — we walk the sequence,
+		// not a hand-set final state.
 		const dialog = await screen.findByRole('dialog', { name: 'Delete allowlist' });
-		// Confirm inside the dialog.
-		await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+		expect(within(dialog).getByText(/Delete the allowlist "test"\?/)).toBeInTheDocument();
 
+		// 3. confirm inside the dialog; the mocked DELETE resolves success.
+		await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
 		expect(deleteAllowlist).toHaveBeenCalledWith('test');
-		// The dialog must be gone — no orphan modal left behind.
-		await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+		// 4. assert BOTH state transitions through what the admin sees
+		//    (§guard: assert the output, never the private $state):
+		//      confirmDeleteOpen → false  ⇒  no dialog left in the DOM
+		//      deleteTarget      → null   ⇒  no lingering empty-name body
+		await waitFor(() => {
+			expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+			expect(screen.queryByText(/Delete the allowlist ""\?/)).not.toBeInTheDocument();
+		});
 	});
 
 	it('G_delete_modal_shows_correct_name: dialog interpolates the name and never lingers with an empty one', async () => {
